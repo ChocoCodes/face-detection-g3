@@ -1,0 +1,8 @@
+{
+  "model_key": "buffalo_s",
+  "name": "InsightFace Buffalo-S (Balanced)",
+  "description": "Moderate size, good accuracy, handles diverse conditions",
+  "input_size": 112,
+  "embedding_dim": 512,
+  "model_type": "arcface"
+}

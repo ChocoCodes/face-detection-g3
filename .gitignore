@@ -1,3 +1,140 @@
-venv
-lfw
-trainer.yml
+# ===================================
+# Python Virtual Environments
+# ===================================
+.venv/
+venv/
+env/
+ENV/
+.env
+
+# ===================================
+# Python Cache & Compiled Files
+# ===================================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.Python
+
+# ===================================
+# IDE & Editor Files
+# ===================================
+.vscode/
+.idea/
+*.vs/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.sublime-project
+*.sublime-workspace
+
+# ===================================
+# Legacy & Archive Files
+# ===================================
+lfw/
+cv_term_project_master/
+archive/
+
+# ===================================
+# Large Datasets (Local & Machine-Specific)
+# ===================================
+data/
+*.tar.gz
+*.zip
+*.rar
+
+# ===================================
+# Large Model Files & Binary Artifacts
+# ===================================
+# Model weights and checkpoints
+*.onnx
+*.pb
+*.h5
+*.hdf5
+*.pth
+*.pt
+*.safetensors
+*.bin
+*.weights
+*.ckpt
+*.pkl
+*.pickle
+*.joblib
+
+# Model directories (keep structure, exclude weights)
+models/**/*.onnx
+models/**/*.pb
+models/**/*.h5
+models/**/*.pth
+models/**/*.pkl
+models/lbph/*.yml
+models/arcface_mobilenet/models/
+
+# Enrollment and cache files
+**/enrollment.json
+**/enrollment_*.json
+**/.cache/
+**/.pkl_cache/
+
+# ===================================
+# Generated Outputs & Reports
+# ===================================
+reports/evaluation/*.json
+reports/evaluation/*.txt
+reports/evaluation/**/*.json
+reports/evaluation/**/*.txt
+reports/benchmark/*.json
+reports/benchmark/*.md
+reports/benchmark/**/*.json
+
+# ===================================
+# Jupyter & Notebook Files
+# ===================================
+.ipynb_checkpoints/
+*.ipynb
+.jupyter/
+
+# ===================================
+# Temporary & Log Files
+# ===================================
+*.log
+*.out
+*.err
+*.tmp
+*.temp
+*.bak
+*.swp
+.tmp/
+
+# ===================================
+# OS-Specific Files
+# ===================================
+.DS_Store
+.DS_Store?
+._*
+.AppleDouble
+.LSOverride
+*.lnk
+ehthumbs.db
+Thumbs.db
+
+# ===================================
+# Sensitive Data & Credentials
+# ===================================
+*.key
+*.pem
+*.p8
+*.p12
+*.pfx
+.env.local
+.env.*.local
+secrets/
+credentials/
+config_secrets.json
