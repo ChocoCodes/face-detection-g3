@@ -1,6 +1,7 @@
 import argparse
 import json
 import time
+from datetime import datetime, timezone
 from collections import deque
 from pathlib import Path
 
@@ -134,6 +135,23 @@ def parse_args() -> argparse.Namespace:
         default=3,
         help="Minimum matched samples in the aggregation window before showing a name.",
     )
+    parser.add_argument(
+        "--fps-log-path",
+        default=root_path("reports", "benchmark", "live_fps", "mobilefacenet_fps.jsonl"),
+        help="Path to append periodic FPS samples as JSONL.",
+    )
+    parser.add_argument(
+        "--fps-log-interval",
+        type=float,
+        default=1.0,
+        help="Seconds between FPS log writes.",
+    )
+    parser.add_argument(
+        "--fps-summary-dir",
+        default=root_path("reports", "benchmark", "live_fps", "runs"),
+        help="Directory to write per-run FPS summary JSON.",
+    )
+    parser.add_argument("--disable-fps-log", action="store_true")
     return parser.parse_args()
 
 
@@ -142,6 +160,8 @@ def main() -> None:
     args.yunet_model = resolve_path(args.yunet_model)
     args.mobilefacenet_model = resolve_path(args.mobilefacenet_model)
     args.enrollment_path = resolve_path(args.enrollment_path)
+    args.fps_log_path = resolve_path(args.fps_log_path)
+    args.fps_summary_dir = resolve_path(args.fps_summary_dir)
 
     if not Path(args.yunet_model).exists():
         raise FileNotFoundError(f"YuNet model not found: {args.yunet_model}")
@@ -196,6 +216,19 @@ def main() -> None:
     aggregate_seconds = max(0.5, args.aggregate_seconds)
     aggregate_min_hits = max(1, args.aggregate_min_hits)
 
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    fps_log_interval = max(0.2, args.fps_log_interval)
+    fps_log_file = None
+    if not args.disable_fps_log:
+        fps_log_path = Path(args.fps_log_path)
+        fps_log_path.parent.mkdir(parents=True, exist_ok=True)
+        fps_log_file = fps_log_path.open("a", encoding="utf-8")
+
+    run_started = time.time()
+    last_log_time = 0.0
+    fps_sum = 0.0
+    fps_samples = 0
+
     prediction_history: deque[tuple[float, str, float, bool]] = deque()
     last_primary_box: tuple[int, int, int, int] | None = None
     cached_draw_items: list[tuple[tuple[int, int, int, int], str, float, tuple[int, int, int]]] = []
@@ -223,6 +256,23 @@ def main() -> None:
             fps_ema = fps
         else:
             fps_ema = 0.85 * fps_ema + 0.15 * fps
+
+        if fps > 0:
+            fps_sum += fps
+            fps_samples += 1
+
+        elapsed_seconds = now - run_started
+        if fps_log_file is not None and (elapsed_seconds - last_log_time) >= fps_log_interval:
+            sample = {
+                "run_id": run_id,
+                "algorithm": "mobilefacenet",
+                "elapsed_seconds": elapsed_seconds,
+                "frame_count": frame_count,
+                "fps": fps_ema,
+            }
+            fps_log_file.write(json.dumps(sample) + "\n")
+            fps_log_file.flush()
+            last_log_time = elapsed_seconds
 
         frame_count += 1
         if frame_count % 5 == 0:
@@ -353,6 +403,28 @@ def main() -> None:
 
     webcam.release()
     cv.destroyAllWindows()
+
+    total_seconds = max(0.0, time.time() - run_started)
+    avg_fps = (fps_sum / fps_samples) if fps_samples else 0.0
+
+    Path(args.fps_summary_dir).mkdir(parents=True, exist_ok=True)
+    summary_path = Path(args.fps_summary_dir) / f"mobilefacenet_{run_id}.json"
+    summary_payload = {
+        "run_id": run_id,
+        "algorithm": "mobilefacenet",
+        "average_fps": avg_fps,
+        "frames": frame_count,
+        "duration_seconds": total_seconds,
+        "threshold": args.threshold,
+    }
+    with summary_path.open("w", encoding="utf-8") as f:
+        json.dump(summary_payload, f, indent=2)
+
+    if fps_log_file is not None:
+        fps_log_file.close()
+
+    print(f"[FPS] Average FPS: {avg_fps:.2f}")
+    print(f"[FPS] Summary: {summary_path}")
 
 
 if __name__ == "__main__":

@@ -59,6 +59,11 @@ def parse_args() -> argparse.Namespace:
         help="Include raw dataset during enrollment build.",
     )
     parser.add_argument(
+        "--include-processed",
+        action="store_true",
+        help="Include processed dataset during enrollment build.",
+    )
+    parser.add_argument(
         "--max-images-per-person",
         type=int,
         default=0,
@@ -369,6 +374,7 @@ def gather_samples(
     augmented_dir: str,
     aug_splits: set[str],
     include_raw: bool,
+    include_processed: bool,
     max_images_per_person: int,
 ) -> List[Sample]:
     samples: List[Sample] = []
@@ -397,12 +403,13 @@ def gather_samples(
                 if os.path.isdir(person_path):
                     add_bucket("raw", person, person_path)
 
-    processed_root = os.path.join(base_data_dir, processed_dir)
-    if os.path.isdir(processed_root):
-        for person in sorted(os.listdir(processed_root)):
-            person_path = os.path.join(processed_root, person)
-            if os.path.isdir(person_path):
-                add_bucket("processed", person, person_path)
+    if include_processed:
+        processed_root = os.path.join(base_data_dir, processed_dir)
+        if os.path.isdir(processed_root):
+            for person in sorted(os.listdir(processed_root)):
+                person_path = os.path.join(processed_root, person)
+                if os.path.isdir(person_path):
+                    add_bucket("processed", person, person_path)
 
     augmented_root = os.path.join(base_data_dir, augmented_dir)
     if os.path.isdir(augmented_root):
@@ -625,6 +632,7 @@ def main() -> None:
         augmented_dir=args.augmented_dir_name,
         aug_splits=aug_splits,
         include_raw=args.include_raw,
+        include_processed=args.include_processed,
         max_images_per_person=args.max_images_per_person,
     )
     if not samples:
@@ -818,6 +826,7 @@ def main() -> None:
             },
             "training_config": {
                 "include_raw": args.include_raw,
+                "include_processed": args.include_processed,
                 "aug_splits": sorted(aug_splits),
                 "assume_processed_are_cropped": args.assume_processed_are_cropped,
                 "raw_fallback_full_image": args.raw_fallback_full_image,
