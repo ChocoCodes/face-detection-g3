@@ -36,6 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--augmented-dir-name", default="augmented41mods")
     parser.add_argument("--aug-splits", default="original,light,medium")
     parser.add_argument("--include-raw", action="store_true")
+    parser.add_argument("--include-processed", action="store_true")
     parser.add_argument("--max-images-per-person", type=int, default=0)
     parser.add_argument(
         "--yunet-model",
@@ -98,6 +99,8 @@ def main() -> None:
         augmented_dir=args.augmented_dir_name,
         aug_splits=aug_splits,
         include_raw=args.include_raw,
+        include_processed=args.include_processed,
+        include_augmented=True,
         max_images_per_person=args.max_images_per_person,
     )
     if not samples:
@@ -223,6 +226,7 @@ def main() -> None:
             },
             "training_config": {
                 "include_raw": args.include_raw,
+                "include_processed": args.include_processed,
                 "aug_splits": sorted(aug_splits),
                 "raw_fallback_full_image": args.raw_fallback_full_image,
                 "raw_detect_max_side": args.raw_detect_max_side,

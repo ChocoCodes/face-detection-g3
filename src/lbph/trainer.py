@@ -27,7 +27,7 @@ def resolve_path(path_value: str) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train an LBPH face recognizer from La Salle processed + augmented datasets."
+        description="Train an LBPH face recognizer from La Salle augmented dataset by default."
     )
     parser.add_argument(
         "--base-data-dir",
@@ -48,6 +48,11 @@ def parse_args() -> argparse.Namespace:
         "--aug-splits",
         default="original,light,medium",
         help="Comma-separated augmented subsets to include (e.g. original,light,medium).",
+    )
+    parser.add_argument(
+        "--include-processed",
+        action="store_true",
+        help="Include processed dataset during training.",
     )
     parser.add_argument(
         "--model-output",
@@ -218,11 +223,11 @@ def main() -> None:
         grid_y=8,
     )
 
-    print(f"[INFO] Using processed dataset: {processed_root}")
+    print(f"[INFO] Using processed dataset: {processed_root} (enabled={args.include_processed})")
     print(f"[INFO] Using augmented dataset: {augmented_root}")
     print(f"[INFO] Included augmented splits: {sorted(include_splits)}")
 
-    processed_people = get_person_dirs_from_processed(processed_root)
+    processed_people = get_person_dirs_from_processed(processed_root) if args.include_processed else []
     augmented_people = get_person_dirs_from_augmented(augmented_root, include_splits)
     person_dirs = processed_people + augmented_people
 

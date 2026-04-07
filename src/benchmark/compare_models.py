@@ -125,6 +125,8 @@ def main() -> None:
     lbph_cmd = [
         args.python,
         root_path("src", "lbph", "evaluate.py"),
+        "--include-processed",
+        "--include-augmented",
         "--max-images-per-person",
         max_images,
         "--aug-splits",
@@ -138,6 +140,8 @@ def main() -> None:
     embedding_cmd = [
         args.python,
         root_path("src", "yunet_mobilefacenet", "evaluate.py"),
+        "--include-processed",
+        "--include-augmented",
         "--max-images-per-person",
         max_images,
         "--aug-splits",

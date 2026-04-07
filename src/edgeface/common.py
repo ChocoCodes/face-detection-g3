@@ -50,6 +50,8 @@ def gather_samples(
     augmented_dir: str,
     aug_splits: set[str],
     include_raw: bool,
+    include_processed: bool,
+    include_augmented: bool,
     max_images_per_person: int,
 ) -> list[Sample]:
     samples: list[Sample] = []
@@ -79,26 +81,28 @@ def gather_samples(
                 if os.path.isdir(person_path):
                     add_bucket("raw", person, person_path)
 
-    processed_root = os.path.join(base_data_dir, processed_dir)
-    if os.path.isdir(processed_root):
-        for person in sorted(os.listdir(processed_root)):
-            person_path = os.path.join(processed_root, person)
-            if os.path.isdir(person_path):
-                add_bucket("processed", person, person_path)
-
-    augmented_root = os.path.join(base_data_dir, augmented_dir)
-    if os.path.isdir(augmented_root):
-        for split_name in sorted(os.listdir(augmented_root)):
-            if aug_splits and split_name.lower() not in aug_splits:
-                continue
-            split_path = os.path.join(augmented_root, split_name)
-            if not os.path.isdir(split_path):
-                continue
-            bucket = f"augmented/{split_name}"
-            for person in sorted(os.listdir(split_path)):
-                person_path = os.path.join(split_path, person)
+    if include_processed:
+        processed_root = os.path.join(base_data_dir, processed_dir)
+        if os.path.isdir(processed_root):
+            for person in sorted(os.listdir(processed_root)):
+                person_path = os.path.join(processed_root, person)
                 if os.path.isdir(person_path):
-                    add_bucket(bucket, person, person_path)
+                    add_bucket("processed", person, person_path)
+
+    if include_augmented:
+        augmented_root = os.path.join(base_data_dir, augmented_dir)
+        if os.path.isdir(augmented_root):
+            for split_name in sorted(os.listdir(augmented_root)):
+                if aug_splits and split_name.lower() not in aug_splits:
+                    continue
+                split_path = os.path.join(augmented_root, split_name)
+                if not os.path.isdir(split_path):
+                    continue
+                bucket = f"augmented/{split_name}"
+                for person in sorted(os.listdir(split_path)):
+                    person_path = os.path.join(split_path, person)
+                    if os.path.isdir(person_path):
+                        add_bucket(bucket, person, person_path)
 
     return samples
 

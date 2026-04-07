@@ -11,6 +11,7 @@ import json
 import os
 import sys
 from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
 
 import cv2 as cv
@@ -58,6 +59,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--smooth-window", type=int, default=5)
     parser.add_argument("--det-thresh", type=float, default=0.5)
     parser.add_argument("--det-size", type=int, default=640)
+    parser.add_argument(
+        "--fps-log-path",
+        default=root_path("reports", "benchmark", "live_fps", "arcface_fps.jsonl"),
+        help="Path to append periodic FPS samples as JSONL.",
+    )
+    parser.add_argument(
+        "--fps-log-interval",
+        type=float,
+        default=1.0,
+        help="Seconds between FPS log writes.",
+    )
+    parser.add_argument(
+        "--fps-summary-dir",
+        default=root_path("reports", "benchmark", "live_fps", "runs"),
+        help="Directory to write per-run FPS summary JSON.",
+    )
+    parser.add_argument("--disable-fps-log", action="store_true")
     return parser.parse_args()
 
 
@@ -106,6 +124,8 @@ def main() -> None:
     args = parse_args()
     args.model_dir = resolve_path(args.model_dir)
     args.enrollment_path = resolve_path(args.enrollment_path)
+    args.fps_log_path = resolve_path(args.fps_log_path)
+    args.fps_summary_dir = resolve_path(args.fps_summary_dir)
     
     if not os.path.exists(args.enrollment_path):
         print(f"[ERROR] Enrollment not found: {args.enrollment_path}")
@@ -143,6 +163,19 @@ def main() -> None:
     
     smooth_window = max(1, args.smooth_window)
     detections_history = deque(maxlen=smooth_window)
+
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    fps_log_interval = max(0.2, args.fps_log_interval)
+    fps_log_file = None
+    if not args.disable_fps_log:
+        fps_log_path = Path(args.fps_log_path)
+        fps_log_path.parent.mkdir(parents=True, exist_ok=True)
+        fps_log_file = fps_log_path.open("a", encoding="utf-8")
+
+    run_started = cv.getTickCount()
+    last_log_time = 0.0
+    fps_sum = 0.0
+    fps_samples = 0
     
     frame_count = 0
     start_frame_time = None
@@ -245,6 +278,20 @@ def main() -> None:
         elapsed_seconds = elapsed_ticks / cv.getTickFrequency()
         if elapsed_seconds > 0:
             last_fps = frame_count / elapsed_seconds
+            fps_sum += last_fps
+            fps_samples += 1
+
+            if fps_log_file is not None and (elapsed_seconds - last_log_time) >= fps_log_interval:
+                sample = {
+                    "run_id": run_id,
+                    "algorithm": "arcface",
+                    "elapsed_seconds": elapsed_seconds,
+                    "frame_count": frame_count,
+                    "fps": last_fps,
+                }
+                fps_log_file.write(json.dumps(sample) + "\n")
+                fps_log_file.flush()
+                last_log_time = elapsed_seconds
         
         info_text = f"FPS: {last_fps:.1f} | Faces: {len(smoothed)} | Frames: {frame_count}"
         cv.putText(
@@ -271,6 +318,27 @@ def main() -> None:
     
     cap.release()
     cv.destroyAllWindows()
+    total_seconds = (cv.getTickCount() - run_started) / cv.getTickFrequency()
+    avg_fps = (fps_sum / fps_samples) if fps_samples else 0.0
+
+    Path(args.fps_summary_dir).mkdir(parents=True, exist_ok=True)
+    summary_path = Path(args.fps_summary_dir) / f"arcface_{run_id}.json"
+    summary_payload = {
+        "run_id": run_id,
+        "algorithm": "arcface",
+        "average_fps": avg_fps,
+        "frames": frame_count,
+        "duration_seconds": total_seconds,
+        "threshold": args.threshold,
+    }
+    with summary_path.open("w", encoding="utf-8") as f:
+        json.dump(summary_payload, f, indent=2)
+
+    if fps_log_file is not None:
+        fps_log_file.close()
+
+    print(f"[FPS] Average FPS: {avg_fps:.2f}")
+    print(f"[FPS] Summary: {summary_path}")
     print(f"[DONE] Processed {frame_count} frames")
 
 

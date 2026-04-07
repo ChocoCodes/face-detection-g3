@@ -49,6 +49,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--raw-dir-name", default="lasalle_db1")
     parser.add_argument("--processed-dir-name", default="lasalle_db1_processed")
     parser.add_argument("--augmented-dir-name", default="augmented41mods")
+    parser.add_argument(
+        "--include-processed",
+        action="store_true",
+        help="Include processed dataset in evaluation.",
+    )
+    parser.add_argument(
+        "--include-augmented",
+        action="store_true",
+        help="Include augmented dataset in evaluation.",
+    )
     parser.add_argument("--aug-splits", default="original,light,medium,heavy")
     parser.add_argument(
         "--model-dir",
@@ -200,7 +210,15 @@ def make_batches(samples: List[EvalSample], batch_size: int) -> List[List[EvalSa
     return [samples[i : i + size] for i in range(0, len(samples), size)]
 
 
-def gather_entries(base_data_dir: str, raw_dir: str, processed_dir: str, aug_dir: str, aug_splits: set[str]):
+def gather_entries(
+    base_data_dir: str,
+    raw_dir: str,
+    processed_dir: str,
+    aug_dir: str,
+    aug_splits: set[str],
+    include_processed: bool,
+    include_augmented: bool,
+):
     entries = []
     
     raw_root = os.path.join(base_data_dir, raw_dir)
@@ -210,26 +228,28 @@ def gather_entries(base_data_dir: str, raw_dir: str, processed_dir: str, aug_dir
             if os.path.isdir(person_path):
                 entries.append(("raw", person, person_path))
     
-    processed_root = os.path.join(base_data_dir, processed_dir)
-    if os.path.isdir(processed_root):
-        for person in sorted(os.listdir(processed_root)):
-            person_path = os.path.join(processed_root, person)
-            if os.path.isdir(person_path):
-                entries.append(("processed", person, person_path))
-    
-    augmented_root = os.path.join(base_data_dir, aug_dir)
-    if os.path.isdir(augmented_root):
-        for split_name in sorted(os.listdir(augmented_root)):
-            if aug_splits and split_name.lower() not in aug_splits:
-                continue
-            split_path = os.path.join(augmented_root, split_name)
-            if not os.path.isdir(split_path):
-                continue
-            bucket = f"augmented/{split_name}"
-            for person in sorted(os.listdir(split_path)):
-                person_path = os.path.join(split_path, person)
+    if include_processed:
+        processed_root = os.path.join(base_data_dir, processed_dir)
+        if os.path.isdir(processed_root):
+            for person in sorted(os.listdir(processed_root)):
+                person_path = os.path.join(processed_root, person)
                 if os.path.isdir(person_path):
-                    entries.append((bucket, person, person_path))
+                    entries.append(("processed", person, person_path))
+    
+    if include_augmented:
+        augmented_root = os.path.join(base_data_dir, aug_dir)
+        if os.path.isdir(augmented_root):
+            for split_name in sorted(os.listdir(augmented_root)):
+                if aug_splits and split_name.lower() not in aug_splits:
+                    continue
+                split_path = os.path.join(augmented_root, split_name)
+                if not os.path.isdir(split_path):
+                    continue
+                bucket = f"augmented/{split_name}"
+                for person in sorted(os.listdir(split_path)):
+                    person_path = os.path.join(split_path, person)
+                    if os.path.isdir(person_path):
+                        entries.append((bucket, person, person_path))
     
     return entries
 
@@ -373,6 +393,8 @@ def main() -> None:
         processed_dir=args.processed_dir_name,
         aug_dir=args.augmented_dir_name,
         aug_splits=aug_splits,
+        include_processed=args.include_processed,
+        include_augmented=args.include_augmented,
     )
     
     if not entries:

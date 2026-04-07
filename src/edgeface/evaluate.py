@@ -33,6 +33,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--raw-dir-name", default="lasalle_db1")
     parser.add_argument("--processed-dir-name", default="lasalle_db1_processed")
     parser.add_argument("--augmented-dir-name", default="augmented41mods")
+    parser.add_argument(
+        "--include-processed",
+        action="store_true",
+        help="Include processed dataset in evaluation.",
+    )
+    parser.add_argument(
+        "--include-augmented",
+        action="store_true",
+        help="Include augmented dataset in evaluation.",
+    )
     parser.add_argument("--aug-splits", default="original,light,medium,heavy")
     parser.add_argument(
         "--yunet-model",
@@ -129,6 +139,8 @@ def main() -> None:
         augmented_dir=args.augmented_dir_name,
         aug_splits=aug_splits,
         include_raw=True,
+        include_processed=args.include_processed,
+        include_augmented=args.include_augmented,
         max_images_per_person=args.max_images_per_person,
     )
     if not samples:
