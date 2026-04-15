@@ -36,11 +36,12 @@ Thumbs.db
 *.sublime-workspace
 
 # ===================================
-# Legacy & Archive Files
+# Legacy, Archive, and Local Documentation
 # ===================================
 lfw/
 cv_term_project_master/
 archive/
+docs/
 
 # ===================================
 # Large Datasets (Local & Machine-Specific)
@@ -68,7 +69,8 @@ data/
 *.pickle
 *.joblib
 
-# Model directories (keep structure, exclude weights)
+# Model directories and local model assets
+models/
 models/**/*.onnx
 models/**/*.pb
 models/**/*.h5
@@ -143,5 +145,3 @@ Thumbs.db
 secrets/
 credentials/
 config_secrets.json
-
-docs
