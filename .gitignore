@@ -93,6 +93,11 @@ reports/evaluation/**/*.txt
 reports/benchmark/*.json
 reports/benchmark/*.md
 reports/benchmark/**/*.json
+reports/benchmark/**/*.jsonl
+reports/benchmark/live_fps/
+
+# Local model pack generated during ArcFace experiments
+models/arcface_mobilenet/
 
 # ===================================
 # Jupyter & Notebook Files
@@ -138,3 +143,5 @@ Thumbs.db
 secrets/
 credentials/
 config_secrets.json
+
+docs

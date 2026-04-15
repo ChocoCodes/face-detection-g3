@@ -49,12 +49,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--augmented-dir-name", default="augmented41mods")
     parser.add_argument(
         "--include-processed",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=False,
         help="Include processed dataset in evaluation.",
     )
     parser.add_argument(
         "--include-augmented",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=False,
         help="Include augmented dataset in evaluation.",
     )
     parser.add_argument(
@@ -99,8 +101,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--report-json",
-        default="",
-        help="Optional path to save evaluation summary as JSON.",
+        default=root_path("reports", "evaluation", "lbph_eval.json"),
+        help="Path to save evaluation summary as JSON (overwrites existing file).",
     )
     return parser.parse_args()
 

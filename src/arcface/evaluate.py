@@ -51,12 +51,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--augmented-dir-name", default="augmented41mods")
     parser.add_argument(
         "--include-processed",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=False,
         help="Include processed dataset in evaluation.",
     )
     parser.add_argument(
         "--include-augmented",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=False,
         help="Include augmented dataset in evaluation.",
     )
     parser.add_argument("--aug-splits", default="original,light,medium,heavy")
@@ -87,6 +89,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--worker-chunksize", type=int, default=32)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--show-misclassified", type=int, default=20)
+    parser.add_argument(
+        "--exclude-identities",
+        default="",
+        help="Comma-separated identity names to exclude from evaluation.",
+    )
     return parser.parse_args()
 
 
@@ -387,6 +394,9 @@ def main() -> None:
     progress_interval = max(1, args.progress_interval)
     
     aug_splits = {s.strip().lower() for s in args.aug_splits.split(",") if s.strip()}
+    excluded_identities = {
+        s.strip().lower() for s in args.exclude_identities.split(",") if s.strip()
+    }
     entries = gather_entries(
         base_data_dir=args.base_data_dir,
         raw_dir=args.raw_dir_name,
@@ -396,6 +406,9 @@ def main() -> None:
         include_processed=args.include_processed,
         include_augmented=args.include_augmented,
     )
+
+    if excluded_identities:
+        entries = [e for e in entries if e[1].lower() not in excluded_identities]
     
     if not entries:
         print("[ERROR] No dataset found.")
@@ -527,6 +540,7 @@ def main() -> None:
             "workers": workers,
             "batch_size": batch_size,
             "threshold_sweep": args.threshold_sweep,
+            "exclude_identities": sorted(excluded_identities),
         },
         "elapsed_seconds": elapsed,
         "buckets": [bucket_to_dict(name, per_bucket[name]) for name in sorted(per_bucket.keys())],
