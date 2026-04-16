@@ -75,6 +75,16 @@ def parse_args() -> argparse.Namespace:
         default=root_path("reports", "benchmark", "live_fps", "runs"),
         help="Directory to write per-run FPS summary JSON.",
     )
+    parser.add_argument(
+        "--algorithm-name",
+        default="arcface",
+        help="Algorithm label used in FPS logs/summaries.",
+    )
+    parser.add_argument(
+        "--fps-run-prefix",
+        default="arcface",
+        help="Filename prefix for per-run FPS summary JSON.",
+    )
     parser.add_argument("--disable-fps-log", action="store_true")
     return parser.parse_args()
 
@@ -284,7 +294,7 @@ def main() -> None:
             if fps_log_file is not None and (elapsed_seconds - last_log_time) >= fps_log_interval:
                 sample = {
                     "run_id": run_id,
-                    "algorithm": "arcface",
+                    "algorithm": args.algorithm_name,
                     "elapsed_seconds": elapsed_seconds,
                     "frame_count": frame_count,
                     "fps": last_fps,
@@ -322,10 +332,10 @@ def main() -> None:
     avg_fps = (fps_sum / fps_samples) if fps_samples else 0.0
 
     Path(args.fps_summary_dir).mkdir(parents=True, exist_ok=True)
-    summary_path = Path(args.fps_summary_dir) / f"arcface_{run_id}.json"
+    summary_path = Path(args.fps_summary_dir) / f"{args.fps_run_prefix}_{run_id}.json"
     summary_payload = {
         "run_id": run_id,
-        "algorithm": "arcface",
+        "algorithm": args.algorithm_name,
         "average_fps": avg_fps,
         "frames": frame_count,
         "duration_seconds": total_seconds,

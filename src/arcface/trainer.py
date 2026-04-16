@@ -98,6 +98,12 @@ def parse_args() -> argparse.Namespace:
         help="Weight multiplier for raw samples in centroid computation.",
     )
     parser.add_argument(
+        "--raw-fallback-full-image",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="When detection fails, extract embedding from resized full image.",
+    )
+    parser.add_argument(
         "--threshold-candidates",
         default="0.30,0.35,0.40,0.45,0.50,0.55,0.60,0.65,0.70",
         help="Cosine thresholds to evaluate.",
@@ -130,10 +136,16 @@ class Sample:
 _WORKER_AFACE = None
 _WORKER_ASSUME_PROCESSED = False
 _WORKER_RAW_WEIGHT = 1.5
+_WORKER_RAW_FALLBACK_FULL_IMAGE = True
 
 
-def _init_worker(model_dir: str, assume_processed_are_cropped: bool, raw_weight: float) -> None:
-    global _WORKER_AFACE, _WORKER_ASSUME_PROCESSED, _WORKER_RAW_WEIGHT
+def _init_worker(
+    model_dir: str,
+    assume_processed_are_cropped: bool,
+    raw_weight: float,
+    raw_fallback_full_image: bool,
+) -> None:
+    global _WORKER_AFACE, _WORKER_ASSUME_PROCESSED, _WORKER_RAW_WEIGHT, _WORKER_RAW_FALLBACK_FULL_IMAGE
     
     try:
         _WORKER_AFACE = insightface.app.FaceAnalysis(
@@ -148,6 +160,7 @@ def _init_worker(model_dir: str, assume_processed_are_cropped: bool, raw_weight:
     
     _WORKER_ASSUME_PROCESSED = assume_processed_are_cropped
     _WORKER_RAW_WEIGHT = raw_weight
+    _WORKER_RAW_FALLBACK_FULL_IMAGE = raw_fallback_full_image
 
 
 def _extract_embedding(
@@ -155,6 +168,7 @@ def _extract_embedding(
     aface,
     assume_processed_are_cropped: bool,
     raw_weight: float,
+    raw_fallback_full_image: bool,
 ) -> tuple[str, np.ndarray | None]:
     """Extract ArcFace embedding from image."""
     img = cv.imread(sample.path)
@@ -165,6 +179,15 @@ def _extract_embedding(
         # ArcFace internally handles detection, alignment, preprocessing
         faces = aface.get(img)
         if not faces:
+            if raw_fallback_full_image:
+                recognition = aface.models.get("recognition")
+                if recognition is not None:
+                    resized = cv.resize(img, (112, 112), interpolation=cv.INTER_AREA)
+                    embedding = recognition.get_feat(resized).flatten().astype(np.float32)
+                    norm = np.linalg.norm(embedding)
+                    if norm > 1e-12:
+                        embedding = embedding / norm
+                    return "ok", embedding
             return "no_face", None
         
         # Use the best (most confident) face
@@ -188,6 +211,7 @@ def _process_sample_worker(sample: Sample) -> tuple[str, str, str, list | None]:
         aface=_WORKER_AFACE,
         assume_processed_are_cropped=_WORKER_ASSUME_PROCESSED,
         raw_weight=_WORKER_RAW_WEIGHT,
+        raw_fallback_full_image=_WORKER_RAW_FALLBACK_FULL_IMAGE,
     )
     if emb is None:
         return status, sample.person, sample.bucket, None
@@ -327,7 +351,7 @@ def main() -> None:
     
     if not os.path.exists(args.model_dir):
         print(f"[ERROR] Model directory not found: {args.model_dir}")
-        print(f"[HINT] Run: python src/arcface_mobilenet/setup_model.py")
+        print(f"[HINT] Run: python src/arcface/setup_model.py")
         sys.exit(1)
     
     os.makedirs(os.path.dirname(args.enrollment_output), exist_ok=True)
@@ -387,6 +411,7 @@ def main() -> None:
                 aface=aface,
                 assume_processed_are_cropped=False,
                 raw_weight=args.raw_weight,
+                raw_fallback_full_image=args.raw_fallback_full_image,
             )
             
             if status == "ok":
@@ -404,7 +429,7 @@ def main() -> None:
         with concurrent.futures.ProcessPoolExecutor(
             max_workers=workers,
             initializer=_init_worker,
-            initargs=(args.model_dir, False, args.raw_weight),
+            initargs=(args.model_dir, False, args.raw_weight, args.raw_fallback_full_image),
         ) as executor:
             batches = make_batches(samples, batch_size)
             idx = 0
@@ -431,6 +456,7 @@ def main() -> None:
         print()
     
     if not per_person_embeddings:
+        print(f"[INFO] Skipped diagnostics: {diagnostics['skipped']}")
         print("[ERROR] No embeddings extracted.")
         sys.exit(1)
     
@@ -525,6 +551,7 @@ def main() -> None:
                 "include_processed": args.include_processed,
                 "aug_splits": sorted(aug_splits),
                 "raw_weight": args.raw_weight,
+                "raw_fallback_full_image": args.raw_fallback_full_image,
                 "max_images_per_person": args.max_images_per_person,
                 "calibration_objective": args.calibration_objective,
                 "workers": workers,

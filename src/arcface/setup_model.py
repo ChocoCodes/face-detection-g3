@@ -152,7 +152,7 @@ def main() -> None:
     setup_metadata(args.output_dir, args.model)
     
     print(f"[SUCCESS] Model ready at: {args.output_dir}")
-    print(f"[NEXT] Run trainer: python src/arcface_mobilenet/trainer.py --model-dir {args.output_dir}")
+    print(f"[NEXT] Run trainer: python src/arcface/trainer.py --model-dir {args.output_dir}")
 
 
 if __name__ == "__main__":

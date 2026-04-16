@@ -90,6 +90,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--show-misclassified", type=int, default=20)
     parser.add_argument(
+        "--raw-fallback-full-image",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="When detection fails, evaluate using resized full image embedding.",
+    )
+    parser.add_argument(
         "--exclude-identities",
         default="",
         help="Comma-separated identity names to exclude from evaluation.",
@@ -110,6 +116,7 @@ class Stats:
     predicted_known: int = 0
     predicted_unknown: int = 0
     face_detected: int = 0
+    face_fallback_used: int = 0
     skipped_unreadable: int = 0
     skipped_no_face: int = 0
     skipped_unseen_identity: int = 0
@@ -126,14 +133,16 @@ _EVAL_AFACE = None
 _EVAL_CENTROIDS = {}
 _EVAL_PEOPLE = []
 _EVAL_THRESHOLD = 0.55
+_EVAL_RAW_FALLBACK_FULL_IMAGE = True
 
 
 def _init_eval_worker(
     model_dir: str,
     centroids_payload: dict,
     threshold: float,
+    raw_fallback_full_image: bool,
 ) -> None:
-    global _EVAL_AFACE, _EVAL_CENTROIDS, _EVAL_PEOPLE, _EVAL_THRESHOLD
+    global _EVAL_AFACE, _EVAL_CENTROIDS, _EVAL_PEOPLE, _EVAL_THRESHOLD, _EVAL_RAW_FALLBACK_FULL_IMAGE
     
     try:
         _EVAL_AFACE = insightface.app.FaceAnalysis(
@@ -152,6 +161,7 @@ def _init_eval_worker(
     }
     _EVAL_PEOPLE = sorted(_EVAL_CENTROIDS.keys())
     _EVAL_THRESHOLD = threshold
+    _EVAL_RAW_FALLBACK_FULL_IMAGE = raw_fallback_full_image
 
 
 def _process_eval_sample(sample: EvalSample) -> dict:
@@ -160,6 +170,7 @@ def _process_eval_sample(sample: EvalSample) -> dict:
         "bucket": sample.bucket,
         "truth": sample.person,
         "status": "",
+        "used_fallback": False,
         "predicted": "Unknown",
         "score": -1.0,
         "path": sample.path,
@@ -177,11 +188,20 @@ def _process_eval_sample(sample: EvalSample) -> dict:
     try:
         faces = _EVAL_AFACE.get(img)
         if not faces:
-            result["status"] = "no_face"
-            return result
-        
-        best_face = max(faces, key=lambda f: f.det_score)
-        emb = best_face.embedding.astype(np.float32)
+            if _EVAL_RAW_FALLBACK_FULL_IMAGE:
+                recognition = _EVAL_AFACE.models.get("recognition")
+                if recognition is None:
+                    result["status"] = "no_face"
+                    return result
+                resized = cv.resize(img, (112, 112), interpolation=cv.INTER_AREA)
+                emb = recognition.get_feat(resized).flatten().astype(np.float32)
+                result["used_fallback"] = True
+            else:
+                result["status"] = "no_face"
+                return result
+        else:
+            best_face = max(faces, key=lambda f: f.det_score)
+            emb = best_face.embedding.astype(np.float32)
         
         # Normalize
         norm = np.linalg.norm(emb)
@@ -319,6 +339,7 @@ def bucket_to_dict(name: str, stats: Stats) -> dict:
         "predicted_known": stats.predicted_known,
         "predicted_unknown": stats.predicted_unknown,
         "face_detected": stats.face_detected,
+        "face_fallback_used": stats.face_fallback_used,
         "skipped_unreadable": stats.skipped_unreadable,
         "skipped_no_face": stats.skipped_no_face,
         "skipped_unseen_identity": stats.skipped_unseen_identity,
@@ -373,7 +394,7 @@ def main() -> None:
     
     if not os.path.exists(args.enrollment_path):
         print(f"[ERROR] Enrollment not found: {args.enrollment_path}")
-        print(f"[HINT] Run: python src/arcface_mobilenet/trainer.py")
+        print(f"[HINT] Run: python src/arcface/trainer.py")
         sys.exit(1)
     
     with open(args.enrollment_path, "r", encoding="utf-8") as f:
@@ -445,8 +466,12 @@ def main() -> None:
         
         per_bucket[bucket_name].evaluated_images += 1
         overall.evaluated_images += 1
-        per_bucket[bucket_name].face_detected += 1
-        overall.face_detected += 1
+        if result.get("used_fallback", False):
+            per_bucket[bucket_name].face_fallback_used += 1
+            overall.face_fallback_used += 1
+        else:
+            per_bucket[bucket_name].face_detected += 1
+            overall.face_detected += 1
         
         truth = result["truth"]
         predicted = result["predicted"]
@@ -495,7 +520,12 @@ def main() -> None:
             print(f"[ERROR] Failed to load ArcFace: {e}")
             sys.exit(1)
         
-        _init_eval_worker(args.model_dir, centroids_payload, args.threshold)
+        _init_eval_worker(
+            args.model_dir,
+            centroids_payload,
+            args.threshold,
+            args.raw_fallback_full_image,
+        )
         
         for idx, sample in enumerate(samples, start=1):
             result = _process_eval_sample(sample)
@@ -507,7 +537,12 @@ def main() -> None:
         with concurrent.futures.ProcessPoolExecutor(
             max_workers=workers,
             initializer=_init_eval_worker,
-            initargs=(args.model_dir, centroids_payload, args.threshold),
+            initargs=(
+                args.model_dir,
+                centroids_payload,
+                args.threshold,
+                args.raw_fallback_full_image,
+            ),
         ) as executor:
             idx = 0
             for batch_results in executor.map(
