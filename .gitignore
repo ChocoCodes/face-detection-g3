@@ -1,3 +1,5 @@
 venv
 lfw
-trainer.yml
+LaSalleDB1
+*.yml
+*.json
