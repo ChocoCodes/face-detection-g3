@@ -27,12 +27,23 @@ def resolve_path(path_value: str) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train an LBPH face recognizer from La Salle augmented dataset by default."
+        description="Train an LBPH face recognizer from split/train by default."
     )
     parser.add_argument(
         "--base-data-dir",
-        default=root_path("data"),
-        help="Base data directory that contains lasalle_db1_processed and augmented41mods.",
+        default=root_path("data", "split"),
+        help="Base data directory that contains the train/eval split folders.",
+    )
+    parser.add_argument(
+        "--raw-dir-name",
+        default="train",
+        help="Folder name for training dataset inside base-data-dir.",
+    )
+    parser.add_argument(
+        "--include-raw",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Include training dataset folder during training.",
     )
     parser.add_argument(
         "--processed-dir-name",
@@ -96,6 +107,18 @@ def get_person_dirs_from_processed(processed_root: str) -> List[Tuple[str, str]]
     out: List[Tuple[str, str]] = []
     for person in sorted(os.listdir(processed_root)):
         person_path = os.path.join(processed_root, person)
+        if os.path.isdir(person_path):
+            out.append((person, person_path))
+    return out
+
+
+def get_person_dirs_from_raw(raw_root: str) -> List[Tuple[str, str]]:
+    if not os.path.isdir(raw_root):
+        return []
+
+    out: List[Tuple[str, str]] = []
+    for person in sorted(os.listdir(raw_root)):
+        person_path = os.path.join(raw_root, person)
         if os.path.isdir(person_path):
             out.append((person, person_path))
     return out
@@ -203,6 +226,7 @@ def main() -> None:
     args.labels_output = resolve_path(args.labels_output)
     args.cascade_path = resolve_path(args.cascade_path)
 
+    raw_root = os.path.join(args.base_data_dir, args.raw_dir_name)
     processed_root = os.path.join(args.base_data_dir, args.processed_dir_name)
     augmented_root = os.path.join(args.base_data_dir, args.augmented_dir_name)
     include_splits = {
@@ -223,13 +247,15 @@ def main() -> None:
         grid_y=8,
     )
 
+    print(f"[INFO] Using training dataset: {raw_root} (enabled={args.include_raw})")
     print(f"[INFO] Using processed dataset: {processed_root} (enabled={args.include_processed})")
     print(f"[INFO] Using augmented dataset: {augmented_root}")
     print(f"[INFO] Included augmented splits: {sorted(include_splits)}")
 
+    raw_people = get_person_dirs_from_raw(raw_root) if args.include_raw else []
     processed_people = get_person_dirs_from_processed(processed_root) if args.include_processed else []
     augmented_people = get_person_dirs_from_augmented(augmented_root, include_splits)
-    person_dirs = processed_people + augmented_people
+    person_dirs = raw_people + processed_people + augmented_people
 
     if not person_dirs:
         raise RuntimeError(

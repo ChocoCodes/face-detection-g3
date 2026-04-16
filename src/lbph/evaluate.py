@@ -43,8 +43,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Evaluate trained LBPH model on raw dataset by default."
     )
-    parser.add_argument("--base-data-dir", default=root_path("data"))
-    parser.add_argument("--raw-dir-name", default="lasalle_db1")
+    parser.add_argument("--base-data-dir", default=root_path("data", "split"))
+    parser.add_argument("--raw-dir-name", default="test")
     parser.add_argument("--processed-dir-name", default="lasalle_db1_processed")
     parser.add_argument("--augmented-dir-name", default="augmented41mods")
     parser.add_argument(

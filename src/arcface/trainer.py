@@ -55,8 +55,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Build ArcFace enrollment for robust real-world face recognition."
     )
-    parser.add_argument("--base-data-dir", default=root_path("data"))
-    parser.add_argument("--raw-dir-name", default="lasalle_db1")
+    parser.add_argument("--base-data-dir", default=root_path("data", "split"))
+    parser.add_argument("--raw-dir-name", default="train")
     parser.add_argument("--processed-dir-name", default="lasalle_db1_processed")
     parser.add_argument("--augmented-dir-name", default="augmented41mods")
     parser.add_argument(
@@ -66,7 +66,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--include-raw",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="Include raw dataset (recommended for diversity).",
     )
     parser.add_argument(
