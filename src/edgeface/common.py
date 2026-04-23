@@ -5,6 +5,8 @@ from pathlib import Path
 import cv2 as cv
 import numpy as np
 
+from src.dataset_layout import gather_augmented_person_dirs, infer_target_split_name
+
 ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -91,18 +93,13 @@ def gather_samples(
 
     if include_augmented:
         augmented_root = os.path.join(base_data_dir, augmented_dir)
-        if os.path.isdir(augmented_root):
-            for split_name in sorted(os.listdir(augmented_root)):
-                if aug_splits and split_name.lower() not in aug_splits:
-                    continue
-                split_path = os.path.join(augmented_root, split_name)
-                if not os.path.isdir(split_path):
-                    continue
-                bucket = f"augmented/{split_name}"
-                for person in sorted(os.listdir(split_path)):
-                    person_path = os.path.join(split_path, person)
-                    if os.path.isdir(person_path):
-                        add_bucket(bucket, person, person_path)
+        target_split = infer_target_split_name(raw_dir=raw_dir, processed_dir=processed_dir)
+        for bucket, person, person_path in gather_augmented_person_dirs(
+            augmented_root=augmented_root,
+            aug_splits=aug_splits,
+            target_split=target_split,
+        ):
+            add_bucket(bucket, person, person_path)
 
     return samples
 

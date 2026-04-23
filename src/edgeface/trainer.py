@@ -30,12 +30,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Build identity enrollment using YuNet detection + EdgeFace embeddings."
     )
-    parser.add_argument("--base-data-dir", default=root_path("data", "split"))
-    parser.add_argument("--raw-dir-name", default="train")
+    parser.add_argument("--base-data-dir", default=root_path("data"))
+    parser.add_argument("--raw-dir-name", default="lasalle_db1")
     parser.add_argument("--processed-dir-name", default="lasalle_db1_processed")
     parser.add_argument("--augmented-dir-name", default="augmented41mods")
-    parser.add_argument("--aug-splits", default="original,light,medium")
-    parser.add_argument("--include-raw", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--aug-splits", default="heavy,medium,light")
+    parser.add_argument("--include-raw", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--include-processed", action="store_true")
     parser.add_argument("--max-images-per-person", type=int, default=0)
     parser.add_argument(

@@ -23,6 +23,12 @@ from src.edgeface.common import (
     resolve_path,
     root_path,
 )
+from src.dataset_layout import infer_target_split_name
+from src.reporting.identity import (
+    attach_entity_identity,
+    build_dataset_profile,
+    derive_model_variant,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -62,6 +68,11 @@ def parse_args() -> argparse.Namespace:
         "--report-json",
         default=root_path("reports", "evaluation", "edgeface_eval.json"),
     )
+    parser.add_argument(
+        "--run-tag",
+        default="",
+        help="Optional run tag to disambiguate reports for the same model/dataset profile.",
+    )
     parser.add_argument("--threshold", type=float, default=-1.0)
     parser.add_argument("--det-score-threshold", type=float, default=0.6)
     parser.add_argument("--det-nms-threshold", type=float, default=0.3)
@@ -73,6 +84,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--raw-clahe", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--raw-gamma", type=float, default=1.15)
     parser.add_argument("--max-images-per-person", type=int, default=0)
+    parser.add_argument(
+        "--threshold-sweep",
+        default="0.30,0.35,0.40,0.45,0.50,0.55,0.60,0.65,0.70",
+        help="Comma-separated thresholds for post-run sweep analysis.",
+    )
     return parser.parse_args()
 
 
@@ -92,6 +108,45 @@ def bucket_summary(name: str, stats: dict[str, int]) -> dict:
         "skipped_no_face": stats["skipped_no_face"],
         "skipped_unseen_identity": stats["skipped_unseen_identity"],
     }
+
+
+def compute_threshold_sweep(eval_records: list[dict], thresholds: list[float]) -> list[dict]:
+    sweep = []
+    buckets = sorted({r["bucket"] for r in eval_records})
+
+    for thr in thresholds:
+        overall_total = len(eval_records)
+        overall_correct = 0
+        per_bucket = {}
+
+        for bucket in buckets:
+            bucket_records = [r for r in eval_records if r["bucket"] == bucket]
+            total = len(bucket_records)
+            correct = 0
+            for r in bucket_records:
+                pred = r["best_person"] if r["score"] >= thr else "Unknown"
+                if pred == r["truth"]:
+                    correct += 1
+            per_bucket[bucket] = {
+                "total": total,
+                "correct": correct,
+                "hit_rate_percent": (100.0 * correct / total) if total else 0.0,
+            }
+            overall_correct += correct
+
+        sweep.append(
+            {
+                "threshold": thr,
+                "overall_total": overall_total,
+                "overall_correct": overall_correct,
+                "overall_hit_rate_percent": (100.0 * overall_correct / overall_total)
+                if overall_total
+                else 0.0,
+                "by_bucket": per_bucket,
+            }
+        )
+
+    return sweep
 
 
 def main() -> None:
@@ -140,7 +195,7 @@ def main() -> None:
         processed_dir=args.processed_dir_name,
         augmented_dir=args.augmented_dir_name,
         aug_splits=aug_splits,
-        include_raw=True,
+        include_raw=args.raw_dir_name != "__disabled__",
         include_processed=args.include_processed,
         include_augmented=args.include_augmented,
         max_images_per_person=args.max_images_per_person,
@@ -163,6 +218,7 @@ def main() -> None:
         }
     )
     misclassified = []
+    eval_records: list[dict] = []
     start = time.time()
 
     for sample in samples:
@@ -228,20 +284,59 @@ def main() -> None:
                     "path": sample.path,
                 }
             )
+        eval_records.append(
+            {
+                "bucket": sample.bucket,
+                "truth": sample.person,
+                "best_person": best_person,
+                "score": float(best_score),
+            }
+        )
 
     overall = {
         key: sum(bucket[key] for bucket in per_bucket.values())
         for key in next(iter(per_bucket.values()), {})
     }
+    thresholds = [float(x.strip()) for x in args.threshold_sweep.split(",") if x.strip()]
+    if not thresholds:
+        thresholds = [0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70]
+    threshold_sweep = compute_threshold_sweep(eval_records, thresholds)
     report = {
         "model_family": "edgeface",
         "enrollment_path": args.enrollment_path,
         "threshold": args.threshold,
+        "config": {
+            "threshold_sweep": ",".join(f"{t:.2f}" for t in thresholds),
+        },
         "elapsed_seconds": time.time() - start,
         "buckets": [bucket_summary(name, per_bucket[name]) for name in sorted(per_bucket.keys())],
         "overall": bucket_summary("overall", overall),
+        "threshold_sweep": threshold_sweep,
         "sample_misclassifications": misclassified,
     }
+    target_split = infer_target_split_name(
+        raw_dir=args.raw_dir_name,
+        processed_dir=args.processed_dir_name,
+    )
+    dataset_profile = build_dataset_profile(
+        base_data_dir=args.base_data_dir,
+        raw_dir_name=args.raw_dir_name,
+        include_raw=args.raw_dir_name != "__disabled__",
+        processed_dir_name=args.processed_dir_name,
+        include_processed=args.include_processed,
+        augmented_dir_name=args.augmented_dir_name,
+        include_augmented=args.include_augmented,
+        aug_splits=aug_splits,
+        target_split=target_split,
+    )
+    model_variant = derive_model_variant(args.enrollment_path, fallback="edgeface")
+    attach_entity_identity(
+        report=report,
+        model_family="edgeface",
+        dataset_profile=dataset_profile,
+        model_variant=model_variant,
+        run_tag=args.run_tag,
+    )
 
     os.makedirs(os.path.dirname(args.report_json), exist_ok=True)
     with open(args.report_json, "w", encoding="utf-8") as f:

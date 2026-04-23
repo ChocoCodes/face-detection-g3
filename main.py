@@ -51,10 +51,27 @@ GROUPED_CHOICES = [
         ],
     ),
     (
+        "Eigenfaces",
+        [
+            ("train", "src/eigenfaces/trainer.py"),
+            ("evaluate", "src/eigenfaces/evaluate.py"),
+            ("live detect", "src/eigenfaces/detect.py"),
+        ],
+    ),
+    (
+        "Fisherfaces",
+        [
+            ("train", "src/fisherfaces/trainer.py"),
+            ("evaluate", "src/fisherfaces/evaluate.py"),
+            ("live detect", "src/fisherfaces/detect.py"),
+        ],
+    ),
+    (
         "Benchmark",
         [
             ("compare models", "src/benchmark/compare_models.py"),
             ("aggregate live FPS", "src/benchmark/aggregate_live_fps.py"),
+            ("aggregate evaluation reports", "src/benchmark/aggregate_evaluation_reports.py"),
         ],
     ),
 ]
@@ -99,6 +116,28 @@ MODEL_INFO_CONFIG = {
             "models/lbph/labels_lasalle.json",
         ],
     },
+    "Eigenfaces": {
+        "trained_markers": [
+            "models/eigenfaces/trainer_eigenfaces.yml",
+            "models/eigenfaces/labels_eigenfaces.json",
+        ],
+        "evaluated_reports": ["reports/evaluation/eigenfaces_eval.json"],
+        "size_paths": [
+            "models/eigenfaces/trainer_eigenfaces.yml",
+            "models/eigenfaces/labels_eigenfaces.json",
+        ],
+    },
+    "Fisherfaces": {
+        "trained_markers": [
+            "models/fisherfaces/trainer_fisherfaces.yml",
+            "models/fisherfaces/labels_fisherfaces.json",
+        ],
+        "evaluated_reports": ["reports/evaluation/fisherfaces_eval.json"],
+        "size_paths": [
+            "models/fisherfaces/trainer_fisherfaces.yml",
+            "models/fisherfaces/labels_fisherfaces.json",
+        ],
+    },
     "Benchmark": {
         "trained_markers": [],
         "evaluated_reports": [],
@@ -127,7 +166,26 @@ BENCHMARK_OVERVIEW_CONFIG = {
         "eval_report": "reports/evaluation/lbph_eval.json",
         "fps_algorithm": "lbph",
     },
+    "Eigenfaces": {
+        "eval_report": "reports/evaluation/eigenfaces_eval.json",
+        "fps_algorithm": "eigenfaces",
+    },
+    "Fisherfaces": {
+        "eval_report": "reports/evaluation/fisherfaces_eval.json",
+        "fps_algorithm": "fisherfaces",
+    },
 }
+
+MODEL_FAMILY_ALIASES: dict[str, set[str]] = {
+    "ArcFace": {"arcface_buffalo_s"},
+    "ArcFace MobileNet INT8": {"arcface_mobilenet_int8", "arcface_buffalo_s_int8"},
+    "MobileFaceNet": {"yunet_mobilefacenet"},
+    "EdgeFace": {"edgeface"},
+    "LBPH": {"lbph"},
+    "Eigenfaces": {"eigenfaces"},
+    "Fisherfaces": {"fisherfaces"},
+}
+
 
 def resolve_path(rel_path: str) -> Path:
     return PROJECT_ROOT / rel_path
@@ -175,6 +233,20 @@ def load_json_if_exists(path: Path) -> dict | None:
 def extract_hit_rate_percent(report_payload: dict | None) -> float | None:
     if not report_payload:
         return None
+    overall = report_payload.get("overall", {})
+    if "hit_rate_percent" in overall:
+        try:
+            return float(overall["hit_rate_percent"])
+        except Exception:
+            pass
+    if "correct" in overall and "evaluated_images" in overall:
+        try:
+            correct = float(overall["correct"])
+            evaluated = float(overall["evaluated_images"])
+            if evaluated > 0:
+                return 100.0 * correct / evaluated
+        except Exception:
+            pass
     threshold_sweep = report_payload.get("threshold_sweep", [])
     if isinstance(threshold_sweep, list) and threshold_sweep:
         best = None
@@ -187,13 +259,25 @@ def extract_hit_rate_percent(report_payload: dict | None) -> float | None:
                 best = value
         if best is not None and best >= 0:
             return best
-    overall = report_payload.get("overall", {})
-    if "hit_rate_percent" in overall:
-        try:
-            return float(overall["hit_rate_percent"])
-        except Exception:
-            return None
     return None
+
+
+def extract_accuracy_percent(report_payload: dict | None) -> float | None:
+    if not report_payload:
+        return None
+    threshold_sweep = report_payload.get("threshold_sweep", [])
+    if isinstance(threshold_sweep, list) and threshold_sweep:
+        best = None
+        for row in threshold_sweep:
+            try:
+                value = float(row.get("overall_hit_rate_percent", -1.0))
+            except Exception:
+                continue
+            if best is None or value > best:
+                best = value
+        if best is not None and best >= 0:
+            return best
+    return extract_hit_rate_percent(report_payload)
 
 
 def collect_fps_summary() -> dict[str, float]:
@@ -242,23 +326,226 @@ def collect_fps_summary() -> dict[str, float]:
     return out
 
 
+def collect_evaluation_entities() -> list[dict]:
+    reports_dir = resolve_path("reports/evaluation")
+    if not reports_dir.exists():
+        return []
+
+    rows: list[dict] = []
+    for report_path in sorted(reports_dir.glob("*.json")):
+        payload = load_json_if_exists(report_path)
+        if not payload:
+            continue
+        model_family = str(payload.get("model_family", "")).strip()
+        if not model_family:
+            continue
+
+        hit_rate = extract_hit_rate_percent(payload)
+        overall = payload.get("overall", {}) if isinstance(payload.get("overall"), dict) else {}
+        evaluated_images = int(overall.get("evaluated_images", 0)) if overall else 0
+        dataset_profile = payload.get("dataset_profile", {})
+        dataset_label = "unknown"
+        if isinstance(dataset_profile, dict):
+            dataset_label = str(dataset_profile.get("label", "unknown"))
+
+        rows.append(
+            {
+                "model_family": model_family,
+                "model_variant": str(payload.get("model_variant", "default")),
+                "entity_key": str(payload.get("entity_key", report_path.stem)),
+                "dataset_label": dataset_label,
+                "hit_rate": hit_rate,
+                "evaluated_images": evaluated_images,
+            }
+        )
+
+    rows.sort(
+        key=lambda row: (
+            row["hit_rate"] if row["hit_rate"] is not None else float("-inf"),
+            row["evaluated_images"],
+        ),
+        reverse=True,
+    )
+    return rows
+
+
+def entities_for_menu_model(model_name: str) -> list[dict]:
+    aliases = {value.lower() for value in MODEL_FAMILY_ALIASES.get(model_name, set())}
+    if not aliases:
+        return []
+    rows = collect_evaluation_entities()
+    return [row for row in rows if str(row.get("model_family", "")).strip().lower() in aliases]
+
+
+def get_arg_value(args: list[str], flag: str, default: str) -> str:
+    for idx, arg in enumerate(args):
+        if arg == flag and idx + 1 < len(args):
+            return args[idx + 1]
+        if arg.startswith(f"{flag}="):
+            return arg.split("=", 1)[1]
+    return default
+
+
+def bool_flag(args: list[str], name: str, default: bool) -> bool:
+    positive = f"--{name}"
+    negative = f"--no-{name}"
+    if any(arg == negative or arg.startswith(f"{negative}=") for arg in args):
+        return False
+    if any(arg == positive or arg.startswith(f"{positive}=") for arg in args):
+        return True
+    return default
+
+
+def infer_split_name(raw_dir_name: str, processed_dir_name: str) -> str:
+    raw_base = Path(raw_dir_name).name.lower()
+    processed_base = Path(processed_dir_name).name.lower()
+    for candidate in (processed_base, raw_base):
+        if candidate in {"train", "test"}:
+            return candidate
+    return ""
+
+
+def build_dataset_label_from_args(
+    args: list[str],
+    *,
+    is_training: bool,
+    is_evaluation: bool,
+) -> str:
+    raw_dir_name = get_arg_value(args, "--raw-dir-name", "lasalle_db1")
+    processed_dir_name = get_arg_value(args, "--processed-dir-name", "lfw-dataset")
+    augmented_dir_name = get_arg_value(args, "--augmented-dir-name", "split_augmented41mods")
+    aug_splits_raw = get_arg_value(args, "--aug-splits", "__disabled__")
+
+    include_raw = bool_flag(args, "include-raw", raw_dir_name != "__disabled__")
+    include_processed = bool_flag(args, "include-processed", False)
+    include_augmented_default = True if is_training and not is_evaluation else False
+    include_augmented = bool_flag(args, "include-augmented", include_augmented_default)
+
+    if raw_dir_name == "__disabled__":
+        include_raw = False
+    if aug_splits_raw.strip() == "__disabled__":
+        include_augmented = False
+
+    aug_splits = [
+        value.strip().lower()
+        for value in aug_splits_raw.split(",")
+        if value.strip() and value.strip() != "__disabled__"
+    ]
+    joined_aug = ",".join(sorted(set(aug_splits))) if aug_splits else "all"
+
+    tokens: list[str] = []
+    if include_raw:
+        tokens.append(f"raw={raw_dir_name}")
+    if include_processed:
+        tokens.append(f"processed={processed_dir_name}")
+    if include_augmented:
+        tokens.append(f"aug={augmented_dir_name}[{joined_aug}]")
+
+    split_name = infer_split_name(raw_dir_name=raw_dir_name, processed_dir_name=processed_dir_name)
+    if split_name:
+        tokens.append(f"split={split_name}")
+
+    return " | ".join(tokens) if tokens else "no_dataset_selected"
+
+
+def maybe_confirm_existing_dataset_combo(
+    *,
+    model_name: str,
+    final_args: list[str],
+    is_training: bool,
+    is_evaluation: bool,
+) -> bool:
+    model_entities = entities_for_menu_model(model_name)
+    if not model_entities:
+        return True
+
+    selected_label = build_dataset_label_from_args(
+        final_args,
+        is_training=is_training,
+        is_evaluation=is_evaluation,
+    )
+    matches = [row for row in model_entities if row.get("dataset_label", "") == selected_label]
+    if not matches:
+        return True
+
+    print("\n[INFO] Existing dataset combination detected for this model:")
+    print(f"  selected: {selected_label}")
+    for row in matches[:5]:
+        hit_rate_display = (
+            f"{row['hit_rate']:.2f}%"
+            if row.get("hit_rate") is not None
+            else "N/A"
+        )
+        print(
+            f"  - variant={row.get('model_variant', 'default')} "
+            f"| hit={hit_rate_display} "
+            f"| eval={row.get('evaluated_images', 0)} "
+            f"| entity={row.get('entity_key', 'n/a')}"
+        )
+
+    answer = input("Continue anyway? (y/n, default n): ").strip().lower()
+    return answer in {"y", "yes"}
+
+
 def print_benchmark_overview() -> None:
     fps_by_algo = collect_fps_summary()
+    rows: list[dict] = []
 
-    print("\nOverview (all models)")
-    print(f"{'Model':<28} {'Hit Rate':>10} {'Avg FPS':>10} {'Size':>12}")
-    print(f"{'-'*28} {'-'*10} {'-'*10} {'-'*12}")
     for model_name, cfg in BENCHMARK_OVERVIEW_CONFIG.items():
         report_path = resolve_path(cfg["eval_report"])
-        hit_rate = extract_hit_rate_percent(load_json_if_exists(report_path))
-        hit_rate_display = f"{hit_rate:.2f}%" if hit_rate is not None else "N/A"
+        report_payload = load_json_if_exists(report_path)
+        hit_rate = extract_hit_rate_percent(report_payload)
+        accuracy = extract_accuracy_percent(report_payload)
 
         algo_key = str(cfg["fps_algorithm"]).strip().lower()
         fps_value = fps_by_algo.get(algo_key)
-        fps_display = f"{fps_value:.2f}" if fps_value is not None else "N/A"
         size_display = get_model_info(model_name)["size"]
 
-        print(f"{model_name:<28} {hit_rate_display:>10} {fps_display:>10} {size_display:>12}")
+        rows.append(
+            {
+                "model": model_name,
+                "hit_rate": hit_rate,
+                "accuracy": accuracy,
+                "fps": fps_value,
+                "size": size_display,
+            }
+        )
+
+    # Sort by highest hit rate first, then highest accuracy.
+    rows.sort(
+        key=lambda row: (
+            row["hit_rate"] if row["hit_rate"] is not None else float("-inf"),
+            row["accuracy"] if row["accuracy"] is not None else float("-inf"),
+        ),
+        reverse=True,
+    )
+
+    print("\nOverview (all models)")
+    print(f"{'Model':<28} {'Hit Rate':>10} {'Accuracy':>10} {'Avg FPS':>10} {'Size':>12}")
+    print(f"{'-'*28} {'-'*10} {'-'*10} {'-'*10} {'-'*12}")
+    for row in rows:
+        hit_rate_display = f"{row['hit_rate']:.2f}%" if row["hit_rate"] is not None else "N/A"
+        accuracy_display = f"{row['accuracy']:.2f}%" if row["accuracy"] is not None else "N/A"
+        fps_display = f"{row['fps']:.2f}" if row["fps"] is not None else "N/A"
+        print(
+            f"{row['model']:<28} {hit_rate_display:>10} {accuracy_display:>10} "
+            f"{fps_display:>10} {row['size']:>12}"
+        )
+
+    entity_rows = collect_evaluation_entities()
+    if entity_rows:
+        print("\nEvaluation entities (same model + different dataset/split are separate)")
+        print(f"{'Model Family':<24} {'Variant':<28} {'Hit Rate':>10} {'Eval':>8} {'Dataset':<64}")
+        print(f"{'-'*24} {'-'*28} {'-'*10} {'-'*8} {'-'*64}")
+        for row in entity_rows[:20]:
+            hit_rate_display = f"{row['hit_rate']:.2f}%" if row["hit_rate"] is not None else "N/A"
+            dataset_display = row["dataset_label"]
+            if len(dataset_display) > 64:
+                dataset_display = dataset_display[:61] + "..."
+            print(
+                f"{row['model_family']:<24} {row['model_variant']:<28} "
+                f"{hit_rate_display:>10} {row['evaluated_images']:>8} {dataset_display:<64}"
+            )
 
 
 def get_model_info(model_name: str) -> dict:
@@ -292,12 +579,126 @@ def get_python_command() -> list[str]:
     return ["python"]
 
 
+def has_flag(args: list[str], flag: str) -> bool:
+    return any(arg == flag or arg.startswith(f"{flag}=") for arg in args)
+
+
+def is_training_action(action_label: str, rel_script: str) -> bool:
+    return rel_script.endswith("trainer.py") and action_label.startswith("train")
+
+
+def is_evaluate_action(action_label: str, rel_script: str) -> bool:
+    return rel_script.endswith("evaluate.py") and action_label.startswith("evaluate")
+
+
+def remove_flag_and_value(args: list[str], flag: str) -> list[str]:
+    out: list[str] = []
+    skip_next = False
+    for idx, arg in enumerate(args):
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == flag:
+            if idx + 1 < len(args):
+                skip_next = True
+            continue
+        if arg.startswith(f"{flag}="):
+            continue
+        out.append(arg)
+    return out
+
+
+def prompt_core_dataset_args(is_training: bool) -> list[str]:
+    phase_label = "training" if is_training else "evaluation"
+
+    print(f"\nSelect base dataset source for {phase_label}:")
+    print("  1. La Salle only -> data/lasalle_db1")
+    print("  2. LFW only      -> data/lfw-dataset")
+    print("  3. Both          -> data/lasalle_db1 + data/lfw-dataset")
+    selected = input("Enter choice (default: 1): ").strip()
+
+    include_raw = True
+    include_processed = False
+    if selected in {"", "1"}:
+        include_raw = True
+        include_processed = False
+    elif selected == "2":
+        include_raw = False
+        include_processed = True
+    elif selected == "3":
+        include_raw = True
+        include_processed = True
+    else:
+        print("[INFO] Invalid choice; defaulting to La Salle only.")
+
+    args: list[str] = [
+        "--base-data-dir",
+        "data",
+        "--raw-dir-name",
+        "lasalle_db1" if include_raw else "__disabled__",
+        "--processed-dir-name",
+        "lfw-dataset",
+    ]
+
+    if is_training:
+        if include_raw:
+            args.append("--include-raw")
+    if include_processed:
+        args.append("--include-processed")
+
+    return args
+
+
+def prompt_augmented_dataset_args(is_evaluation: bool) -> list[str]:
+    print("\nSelect augmented datasets (comma/space separated numbers):")
+    print("  1. light   -> data/split_augmented41mods/light")
+    print("  2. medium  -> data/split_augmented41mods/medium")
+    selected = input("Enter choices (blank = none): ").strip()
+
+    if not selected:
+        chosen: list[str] = []
+    else:
+        tokens = selected.replace(",", " ").split()
+        mapping = {"1": "light", "2": "medium"}
+        chosen = []
+        for token in tokens:
+            value = mapping.get(token)
+            if value is None:
+                print(f"[WARN] Ignoring invalid choice: {token}")
+                continue
+            if value not in chosen:
+                chosen.append(value)
+
+    args: list[str] = [
+        "--augmented-dir-name",
+        "split_augmented41mods",
+    ]
+    if chosen:
+        args.extend(["--aug-splits", ",".join(chosen)])
+        if is_evaluation:
+            args.append("--include-augmented")
+    else:
+        args.extend(["--aug-splits", "__disabled__"])
+        if is_evaluation:
+            args.append("--no-include-augmented")
+
+    return args
+
+
 def run_python_script(rel_script: str, extra_args: list[str], label: str) -> int:
     script_path = resolve_path(rel_script)
     cmd = [*get_python_command(), str(script_path), *extra_args]
+    env = os.environ.copy()
+    current_pythonpath = env.get("PYTHONPATH", "").strip()
+    project_root_str = str(PROJECT_ROOT)
+    env["PYTHONPATH"] = (
+        f"{project_root_str}{os.pathsep}{current_pythonpath}"
+        if current_pythonpath
+        else project_root_str
+    )
     print(f"\n[RUN] {label}")
     print(f"[CMD] {' '.join(shlex.quote(part) for part in cmd)}\n")
-    completed = subprocess.run(cmd, cwd=PROJECT_ROOT)
+    completed = subprocess.run(cmd, cwd=PROJECT_ROOT, env=env)
     print(f"\n[EXIT] code={completed.returncode}")
     return completed.returncode
 
@@ -341,6 +742,21 @@ def print_model_actions_menu(model_name: str, actions: list[tuple[str, str]]) ->
     print(f"State: {trained_state}")
     print(f"Evaluation: {eval_state}")
     print(f"Size: {info['size']}")
+    model_entities = entities_for_menu_model(model_name)
+    if model_entities:
+        print(f"Saved dataset combos: {len(model_entities)}")
+        for row in model_entities[:3]:
+            hit_rate_display = (
+                f"{row['hit_rate']:.2f}%"
+                if row.get("hit_rate") is not None
+                else "N/A"
+            )
+            print(
+                f"  - {row.get('dataset_label', 'unknown')} "
+                f"(variant={row.get('model_variant', 'default')}, hit={hit_rate_display})"
+            )
+    else:
+        print("Saved dataset combos: 0")
     if model_name == "Benchmark":
         print_benchmark_overview()
     print("\nChoices:")
@@ -353,11 +769,19 @@ def print_model_actions_menu(model_name: str, actions: list[tuple[str, str]]) ->
 def run_choice(model_name: str, action_label: str, rel_script: str, extra_args: list[str]) -> int:
     script_path = resolve_path(rel_script)
     cmd = [*get_python_command(), str(script_path), *extra_args]
+    env = os.environ.copy()
+    current_pythonpath = env.get("PYTHONPATH", "").strip()
+    project_root_str = str(PROJECT_ROOT)
+    env["PYTHONPATH"] = (
+        f"{project_root_str}{os.pathsep}{current_pythonpath}"
+        if current_pythonpath
+        else project_root_str
+    )
 
     print(f"\n[RUN] {model_name}: {action_label}")
     print(f"[CMD] {' '.join(shlex.quote(part) for part in cmd)}\n")
 
-    completed = subprocess.run(cmd, cwd=PROJECT_ROOT)
+    completed = subprocess.run(cmd, cwd=PROJECT_ROOT, env=env)
     print(f"\n[EXIT] code={completed.returncode}")
     return completed.returncode
 
@@ -401,6 +825,8 @@ def main() -> int:
                 continue
 
             action_label, rel_script = actions[action_index]
+            training_action = is_training_action(action_label, rel_script)
+            evaluate_action = is_evaluate_action(action_label, rel_script)
             if (
                 model_name == "ArcFace MobileNet INT8"
                 and action_label in {"train enrollment", "evaluate", "live detect"}
@@ -409,9 +835,45 @@ def main() -> int:
                 if not maybe_prepare_int8_pack():
                     print("[INFO] Skipping action because INT8 model pack is not ready.")
                     continue
+
+            preset_args: list[str] = []
+            if training_action or evaluate_action:
+                preset_args = [
+                    *prompt_core_dataset_args(is_training=training_action),
+                    *prompt_augmented_dataset_args(is_evaluation=evaluate_action),
+                ]
+
             extra = input("Optional extra args (or press Enter): ").strip()
             extra_args = shlex.split(extra) if extra else []
-            run_choice(model_name, action_label, rel_script, extra_args)
+            if has_flag(extra_args, "--include-raw") or has_flag(extra_args, "--no-include-raw"):
+                preset_args = [arg for arg in preset_args if arg != "--include-raw"]
+            if has_flag(extra_args, "--include-processed") or has_flag(extra_args, "--no-include-processed"):
+                preset_args = [arg for arg in preset_args if arg != "--include-processed"]
+            if has_flag(extra_args, "--include-augmented") or has_flag(extra_args, "--no-include-augmented"):
+                preset_args = [arg for arg in preset_args if arg not in {"--include-augmented", "--no-include-augmented"}]
+            if has_flag(extra_args, "--base-data-dir"):
+                preset_args = remove_flag_and_value(preset_args, "--base-data-dir")
+            if has_flag(extra_args, "--raw-dir-name"):
+                preset_args = remove_flag_and_value(preset_args, "--raw-dir-name")
+            if has_flag(extra_args, "--processed-dir-name"):
+                preset_args = remove_flag_and_value(preset_args, "--processed-dir-name")
+            if has_flag(extra_args, "--augmented-dir-name"):
+                preset_args = remove_flag_and_value(preset_args, "--augmented-dir-name")
+            if has_flag(extra_args, "--aug-splits"):
+                preset_args = remove_flag_and_value(preset_args, "--aug-splits")
+
+            final_args = [*preset_args, *extra_args]
+            if training_action or evaluate_action:
+                should_continue = maybe_confirm_existing_dataset_combo(
+                    model_name=model_name,
+                    final_args=final_args,
+                    is_training=training_action,
+                    is_evaluation=evaluate_action,
+                )
+                if not should_continue:
+                    print("[INFO] Action cancelled. Choose another dataset combination or add custom args.")
+                    continue
+            run_choice(model_name, action_label, rel_script, final_args)
 
             again = input("\nRun another action for this model? (y/n): ").strip().lower()
             if again not in {"y", "yes"}:

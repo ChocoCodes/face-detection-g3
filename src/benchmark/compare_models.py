@@ -78,6 +78,15 @@ def build_markdown(summary: dict) -> str:
     lines.append(f"- Generated UTC: {summary['generated_at_utc']}")
     lines.append(f"- Mode: {summary['mode']}")
     lines.append("")
+    lines.append("## Entity Context")
+    lines.append("")
+    lines.append(
+        f"- LBPH entity: `{summary['lbph'].get('entity_key', 'n/a')}` | dataset: {summary['lbph'].get('dataset_label', 'unknown')}"
+    )
+    lines.append(
+        f"- YuNet+MobileFaceNet entity: `{summary['embedding'].get('entity_key', 'n/a')}` | dataset: {summary['embedding'].get('dataset_label', 'unknown')}"
+    )
+    lines.append("")
     lines.append("## Overall")
     lines.append("")
     lines.append("| Model | Hit Rate (%) | Eval Time (s) |")
@@ -186,11 +195,21 @@ def main() -> None:
         "mode": args.mode,
         "lbph": {
             "report_path": args.lbph_report,
+            "model_family": lbph_report.get("model_family", "lbph"),
+            "model_variant": lbph_report.get("model_variant", "default"),
+            "entity_key": lbph_report.get("entity_key", "lbph::default"),
+            "dataset_key": lbph_report.get("dataset_key", ""),
+            "dataset_label": lbph_report.get("dataset_profile", {}).get("label", "unknown"),
             "overall_hit_rate_percent": hit_rate(lbph_report),
             "elapsed_seconds": elapsed(lbph_report),
         },
         "embedding": {
             "report_path": args.embedding_report,
+            "model_family": embedding_report.get("model_family", "yunet_mobilefacenet"),
+            "model_variant": embedding_report.get("model_variant", "default"),
+            "entity_key": embedding_report.get("entity_key", "yunet_mobilefacenet::default"),
+            "dataset_key": embedding_report.get("dataset_key", ""),
+            "dataset_label": embedding_report.get("dataset_profile", {}).get("label", "unknown"),
             "overall_hit_rate_percent": hit_rate(embedding_report),
             "elapsed_seconds": elapsed(embedding_report),
         },

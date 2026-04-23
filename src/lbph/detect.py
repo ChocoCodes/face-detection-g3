@@ -7,7 +7,8 @@ from pathlib import Path
 
 import cv2 as cv
 
-IMG_SIZE = (100, 100)
+from src.lbph.preprocess import IMG_SIZE, normalize_face, resolve_eye_cascade_path, align_face_by_eyes
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -63,6 +64,11 @@ def parse_args() -> argparse.Namespace:
         help="Path to Haar cascade XML.",
     )
     parser.add_argument(
+        "--eye-cascade-path",
+        default="",
+        help="Optional path to Haar eye cascade XML. If empty, OpenCV default is used.",
+    )
+    parser.add_argument(
         "--camera-index",
         type=int,
         default=0,
@@ -71,14 +77,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--target-width",
         type=int,
-        default=384,
-        help="Internal resized frame width for faster detection.",
+        default=0,
+        help="Deprecated compatibility flag. Use --downscale-max-side instead.",
+    )
+    parser.add_argument(
+        "--downscale-max-side",
+        type=int,
+        default=640,
+        help="Longest side for detection frames; 0 disables downscaling.",
     )
     parser.add_argument(
         "--unknown-threshold",
         type=float,
         default=55.0,
-        help="LBPH distance threshold; lower is stricter, higher is more permissive.",
+        help="LBPH distance threshold; lower is stricter.",
     )
     parser.add_argument(
         "--min-face-size",
@@ -90,24 +102,42 @@ def parse_args() -> argparse.Namespace:
         "--scale-factor",
         type=float,
         default=1.15,
-        help="Scale factor for Haar detectMultiScale (higher is usually faster, less sensitive).",
+        help="Scale factor for Haar detectMultiScale.",
     )
     parser.add_argument(
         "--min-neighbors",
         type=int,
         default=8,
-        help="Min neighbors for Haar detectMultiScale (higher reduces false positives).",
+        help="Min neighbors for Haar detectMultiScale.",
     )
     parser.add_argument(
         "--detect-every",
         type=int,
-        default=2,
-        help="Run detect+predict every N frames and reuse last results in between.",
+        default=3,
+        help="Run full-frame detection every N frames.",
+    )
+    parser.add_argument(
+        "--track-between-detections",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Use optical flow to track a face between detector passes.",
     )
     parser.add_argument(
         "--largest-face-only",
         action="store_true",
-        help="Only evaluate the largest detected face (faster and usually more stable).",
+        help="Only evaluate the largest detected face.",
+    )
+    parser.add_argument(
+        "--align-eyes",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable classical eye-based alignment before equalization/resizing.",
+    )
+    parser.add_argument(
+        "--equalization",
+        choices=["equalize", "clahe"],
+        default="equalize",
+        help="Face contrast normalization.",
     )
     parser.add_argument(
         "--temporal-window",
@@ -120,6 +150,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=3,
         help="Required consistent hits in temporal window before showing a name.",
+    )
+    parser.add_argument(
+        "--min-stable-frames",
+        type=int,
+        default=2,
+        help="Minimum tracked/detected frames before recognition is accepted.",
     )
     parser.add_argument(
         "--fps-log-path",
@@ -137,8 +173,68 @@ def parse_args() -> argparse.Namespace:
         default=root_path("reports", "benchmark", "live_fps", "runs"),
         help="Directory to write per-run FPS summary JSON.",
     )
+    parser.add_argument(
+        "--session-log-json",
+        default="",
+        help="Optional JSON path to write a per-session live metrics summary.",
+    )
     parser.add_argument("--disable-fps-log", action="store_true")
     return parser.parse_args()
+
+
+def maybe_downscale_for_detect(gray, max_side: int):
+    if max_side <= 0:
+        return gray, 1.0
+    h, w = gray.shape[:2]
+    longest = max(h, w)
+    if longest <= max_side:
+        return gray, 1.0
+    scale = max_side / float(longest)
+    resized = cv.resize(gray, (int(w * scale), int(h * scale)))
+    return resized, scale
+
+
+def detect_primary_face(gray, face_cascade, min_face_size: int, scale_factor: float, min_neighbors: int, downscale_max_side: int):
+    detect_gray, scale = maybe_downscale_for_detect(gray, downscale_max_side)
+    faces = face_cascade.detectMultiScale(
+        detect_gray,
+        scaleFactor=scale_factor,
+        minNeighbors=min_neighbors,
+        minSize=(min_face_size, min_face_size),
+    )
+    if len(faces) == 0:
+        return None
+
+    x, y, w, h = max(faces, key=lambda b: int(b[2]) * int(b[3]))
+    if scale != 1.0:
+        x = int(round(x / scale))
+        y = int(round(y / scale))
+        w = int(round(w / scale))
+        h = int(round(h / scale))
+    return int(x), int(y), int(w), int(h)
+
+
+def clamp_box(box, width: int, height: int):
+    x, y, w, h = box
+    x = max(0, min(x, width - 1))
+    y = max(0, min(y, height - 1))
+    w = max(1, min(w, width - x))
+    h = max(1, min(h, height - y))
+    return x, y, w, h
+
+
+def box_to_points(box):
+    x, y, w, h = box
+    return cv.UMat.get(cv.UMat(cv.UMat([[[x, y]], [[x + w, y]], [[x + w, y + h]], [[x, y + h]]], cv.CV_32FC2)))
+
+
+def points_to_box(points, width: int, height: int):
+    pts = points.reshape(-1, 2)
+    x_min = int(max(0, min(pts[:, 0])))
+    y_min = int(max(0, min(pts[:, 1])))
+    x_max = int(min(width - 1, max(pts[:, 0])))
+    y_max = int(min(height - 1, max(pts[:, 1])))
+    return clamp_box((x_min, y_min, max(1, x_max - x_min), max(1, y_max - y_min)), width, height)
 
 
 def main() -> None:
@@ -146,14 +242,30 @@ def main() -> None:
     args.model_path = resolve_path(args.model_path)
     args.labels_path = resolve_path(args.labels_path)
     args.cascade_path = resolve_path(args.cascade_path)
+    args.eye_cascade_path = resolve_path(resolve_eye_cascade_path(args.eye_cascade_path))
     args.fps_log_path = resolve_path(args.fps_log_path)
     args.fps_summary_dir = resolve_path(args.fps_summary_dir)
+    if args.session_log_json:
+        args.session_log_json = resolve_path(args.session_log_json)
+
+    if args.target_width > 0 and args.downscale_max_side <= 0:
+        args.downscale_max_side = args.target_width
 
     cv.setUseOptimized(True)
 
     face_cascade = cv.CascadeClassifier(args.cascade_path)
     if face_cascade.empty():
         raise FileNotFoundError(f"Could not load cascade file: {args.cascade_path}")
+
+    eye_cascade: cv.CascadeClassifier | None = None
+    if args.align_eyes:
+        eye_cascade = cv.CascadeClassifier(args.eye_cascade_path)
+        if eye_cascade.empty():
+            print(
+                f"[WARN] Could not load eye cascade at {args.eye_cascade_path}. "
+                "Alignment will be disabled."
+            )
+            eye_cascade = None
 
     recognizer = cv.face.LBPHFaceRecognizer_create()
     recognizer.read(args.model_path)
@@ -169,17 +281,14 @@ def main() -> None:
 
     print("[INFO] Press 'd' to exit.")
 
-    prev_frame_time = 0.0
-    displayed_fps = 0
-    frame_count = 0
-    fps_ema = 0.0
-
     detect_every = max(1, args.detect_every)
     temporal_window = max(1, args.temporal_window)
     min_stable_hits = max(1, min(args.min_stable_hits, temporal_window))
+    min_stable_frames = max(1, args.min_stable_frames)
 
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     fps_log_interval = max(0.2, args.fps_log_interval)
+
     fps_log_file = None
     if not args.disable_fps_log:
         fps_log_path = Path(args.fps_log_path)
@@ -188,35 +297,168 @@ def main() -> None:
 
     run_started = time.time()
     last_log_time = 0.0
+
+    frame_count = 0
+    detection_count = 0
+    recognition_count = 0
+    track_updates = 0
     fps_sum = 0.0
     fps_samples = 0
 
+    previous_frame_time = time.time()
+    fps_ema = 0.0
+    rec_fps_ema = 0.0
+    rec_tick_last = time.time()
+    rec_tick_count = 0
+
     prediction_history: deque[tuple[str, float, bool]] = deque(maxlen=temporal_window)
-    last_primary_box: tuple[int, int, int, int] | None = None
-    cached_draw_items: list[tuple[tuple[int, int, int, int], str, float, tuple[int, int, int]]] = []
+    tracked_box: tuple[int, int, int, int] | None = None
+    track_points = None
+    stable_frames = 0
+
+    prev_gray = None
+    current_label = "Unknown"
+    current_distance = -1.0
+    current_confidence = 0.0
 
     while True:
         ret, frame = webcam.read()
         if not ret:
             break
 
-        height, width = frame.shape[:2]
-        ratio = args.target_width / float(width)
-        resized = cv.resize(frame, (args.target_width, int(height * ratio)))
-
+        frame_count += 1
         now = time.time()
-        frame_time = now - prev_frame_time
-        fps = 1.0 / frame_time if frame_time > 0 else 0.0
-        prev_frame_time = now
-
-        if fps_ema == 0.0:
-            fps_ema = fps
-        else:
-            fps_ema = 0.85 * fps_ema + 0.15 * fps
-
+        delta = now - previous_frame_time
+        previous_frame_time = now
+        fps = (1.0 / delta) if delta > 0 else 0.0
+        fps_ema = fps if fps_ema == 0.0 else 0.85 * fps_ema + 0.15 * fps
         if fps > 0:
             fps_sum += fps
             fps_samples += 1
+
+        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+        h, w = gray.shape[:2]
+
+        updated_by_tracking = False
+        if (
+            args.track_between_detections
+            and tracked_box is not None
+            and track_points is not None
+            and prev_gray is not None
+            and (frame_count % detect_every) != 0
+        ):
+            next_points, status, _ = cv.calcOpticalFlowPyrLK(prev_gray, gray, track_points, None)
+            if next_points is not None and status is not None:
+                good_new = next_points[status.flatten() == 1]
+                if len(good_new) >= 3:
+                    new_box = points_to_box(good_new.reshape(-1, 1, 2), w, h)
+                    if iou(tracked_box, new_box) > 0.05:
+                        tracked_box = new_box
+                        track_points = good_new.reshape(-1, 1, 2).astype("float32")
+                        stable_frames += 1
+                        updated_by_tracking = True
+                        track_updates += 1
+
+        need_detect = (frame_count % detect_every == 0) or (tracked_box is None)
+        if need_detect and not updated_by_tracking:
+            face_box = detect_primary_face(
+                gray=gray,
+                face_cascade=face_cascade,
+                min_face_size=args.min_face_size,
+                scale_factor=args.scale_factor,
+                min_neighbors=args.min_neighbors,
+                downscale_max_side=args.downscale_max_side,
+            )
+            detection_count += 1
+            if face_box is None:
+                tracked_box = None
+                track_points = None
+                prediction_history.clear()
+                stable_frames = 0
+                current_label = "Unknown"
+                current_distance = -1.0
+                current_confidence = 0.0
+            else:
+                tracked_box = clamp_box(face_box, w, h)
+                tx, ty, tw, th = tracked_box
+                track_points = (
+                    cv.UMat.get(
+                        cv.UMat(
+                            [
+                                [[tx, ty]],
+                                [[tx + tw, ty]],
+                                [[tx + tw, ty + th]],
+                                [[tx, ty + th]],
+                            ],
+                            cv.CV_32FC2,
+                        )
+                    )
+                    .astype("float32")
+                )
+                stable_frames = 1
+
+        if tracked_box is not None and stable_frames >= min_stable_frames:
+            x, y, fw, fh = clamp_box(tracked_box, w, h)
+            roi = gray[y : y + fh, x : x + fw]
+
+            if roi.size > 0:
+                aligned = False
+                if args.align_eyes and eye_cascade is not None and not eye_cascade.empty():
+                    roi, aligned = align_face_by_eyes(roi, eye_cascade)
+
+                processed = normalize_face(roi, img_size=IMG_SIZE, equalization=args.equalization)
+                pred_id, distance = recognizer.predict(processed)
+                raw_match = distance <= args.unknown_threshold
+                raw_name = id_to_name.get(pred_id, "Unknown") if raw_match else "Unknown"
+                prediction_history.append((raw_name, float(distance), raw_match))
+
+                recognized = False
+                label = "Unknown"
+                display_distance = float(distance)
+
+                stable_hits = [h for h in prediction_history if h[2] and h[0] != "Unknown"]
+                if len(stable_hits) >= min_stable_hits:
+                    top_name, top_count = Counter(h[0] for h in stable_hits).most_common(1)[0]
+                    if top_count >= min_stable_hits:
+                        same_name_dist = [h[1] for h in stable_hits if h[0] == top_name]
+                        recognized = True
+                        label = top_name
+                        display_distance = sum(same_name_dist) / len(same_name_dist)
+
+                current_label = label if recognized else "Unknown"
+                current_distance = display_distance
+                current_confidence = max(
+                    0.0,
+                    min(100.0, 100.0 * (1.0 - (display_distance / max(1.0, args.unknown_threshold)))),
+                )
+
+                recognition_count += 1
+                rec_tick_count += 1
+
+                if (now - rec_tick_last) >= 1.0:
+                    recent_rec_fps = rec_tick_count / max(1e-6, now - rec_tick_last)
+                    rec_fps_ema = (
+                        recent_rec_fps
+                        if rec_fps_ema == 0.0
+                        else 0.80 * rec_fps_ema + 0.20 * recent_rec_fps
+                    )
+                    rec_tick_last = now
+                    rec_tick_count = 0
+
+                box_color = (0, 255, 0) if current_label != "Unknown" else (0, 0, 255)
+                cv.rectangle(frame, (x, y), (x + fw, y + fh), box_color, 2)
+
+                align_tag = "A" if aligned else "NA"
+                cv.putText(
+                    frame,
+                    f"{current_label} d={current_distance:.1f} conf={current_confidence:.1f}% {align_tag}",
+                    (x, max(0, y - 10)),
+                    cv.FONT_HERSHEY_COMPLEX,
+                    0.55,
+                    (255, 255, 255),
+                    2,
+                    cv.LINE_AA,
+                )
 
         elapsed_seconds = now - run_started
         if fps_log_file is not None and (elapsed_seconds - last_log_time) >= fps_log_interval:
@@ -226,110 +468,35 @@ def main() -> None:
                 "elapsed_seconds": elapsed_seconds,
                 "frame_count": frame_count,
                 "fps": fps_ema,
+                "recognition_fps": rec_fps_ema,
+                "detections": detection_count,
+                "recognitions": recognition_count,
             }
             fps_log_file.write(json.dumps(sample) + "\n")
             fps_log_file.flush()
             last_log_time = elapsed_seconds
 
-        frame_count += 1
-        if frame_count % 5 == 0:
-            displayed_fps = int(fps_ema)
-
-        should_detect = (frame_count % detect_every == 0) or not cached_draw_items
-        if should_detect:
-            gray = cv.cvtColor(resized, cv.COLOR_BGR2GRAY)
-            equalized = cv.equalizeHist(gray)
-
-            faces = face_cascade.detectMultiScale(
-                equalized,
-                scaleFactor=args.scale_factor,
-                minNeighbors=args.min_neighbors,
-                minSize=(args.min_face_size, args.min_face_size),
-            )
-
-            if len(faces) == 0:
-                prediction_history.clear()
-                last_primary_box = None
-                cached_draw_items = []
-            else:
-                faces_list = list(faces)
-                if args.largest_face_only:
-                    faces_list = [max(faces_list, key=lambda b: b[2] * b[3])]
-
-                new_draw_items: list[
-                    tuple[tuple[int, int, int, int], str, float, tuple[int, int, int]]
-                ] = []
-
-                for (x, y, w, h) in faces_list:
-                    roi = equalized[y : y + h, x : x + w]
-                    if roi.size == 0:
-                        continue
-
-                    current_box = (int(x), int(y), int(w), int(h))
-                    if last_primary_box is not None and iou(last_primary_box, current_box) < 0.20:
-                        prediction_history.clear()
-                    last_primary_box = current_box
-
-                    roi = cv.resize(roi, IMG_SIZE)
-                    label_id, distance = recognizer.predict(roi)
-
-                    is_raw_match = distance <= args.unknown_threshold
-                    raw_name = id_to_name.get(label_id, "Unknown") if is_raw_match else "Unknown"
-                    prediction_history.append((raw_name, float(distance), is_raw_match))
-
-                    recognized = False
-                    name = "Unknown"
-                    display_distance = float(distance)
-
-                    stable_hits = [h for h in prediction_history if h[2] and h[0] != "Unknown"]
-                    if len(stable_hits) >= min_stable_hits:
-                        top_name, top_count = Counter(h[0] for h in stable_hits).most_common(1)[0]
-                        if top_count >= min_stable_hits:
-                            same_name_dist = [h[1] for h in stable_hits if h[0] == top_name]
-                            recognized = True
-                            name = top_name
-                            display_distance = sum(same_name_dist) / len(same_name_dist)
-
-                    color = (0, 255, 0) if recognized else (0, 0, 255)
-
-                    orig_x, orig_y = int(x / ratio), int(y / ratio)
-                    orig_w, orig_h = int(w / ratio), int(h / ratio)
-                    draw_box = (orig_x, orig_y, orig_w, orig_h)
-                    new_draw_items.append((draw_box, name, display_distance, color))
-
-                cached_draw_items = new_draw_items
-
-        for (draw_box, name, display_distance, color) in cached_draw_items:
-            orig_x, orig_y, orig_w, orig_h = draw_box
-            cv.rectangle(
-                frame,
-                (orig_x, orig_y),
-                (orig_x + orig_w, orig_y + orig_h),
-                color,
-                2,
-            )
-            cv.putText(
-                frame,
-                f"{name} ({display_distance:.1f})",
-                (orig_x, max(0, orig_y - 10)),
-                cv.FONT_HERSHEY_COMPLEX,
-                0.6,
-                (255, 255, 255),
-                2,
-                cv.LINE_AA,
-            )
-
         cv.putText(
             frame,
-            f"FPS: {displayed_fps}",
+            f"FPS {fps_ema:.1f} | RecFPS {rec_fps_ema:.1f} | DetectInt {detect_every}",
             (10, 30),
             cv.FONT_HERSHEY_SIMPLEX,
-            1,
+            0.7,
             (0, 255, 0),
+            2,
+        )
+        cv.putText(
+            frame,
+            f"ID {current_label} | Dist {current_distance:.1f} | Thr {args.unknown_threshold:.1f}",
+            (10, 58),
+            cv.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (255, 255, 255),
             2,
         )
 
         cv.imshow("Camera Output", frame)
+        prev_gray = gray
 
         if cv.waitKey(1) & 0xFF == ord("d"):
             break
@@ -339,6 +506,7 @@ def main() -> None:
 
     total_seconds = max(0.0, time.time() - run_started)
     avg_fps = (fps_sum / fps_samples) if fps_samples else 0.0
+    avg_rec_fps = (recognition_count / total_seconds) if total_seconds > 0 else 0.0
 
     Path(args.fps_summary_dir).mkdir(parents=True, exist_ok=True)
     summary_path = Path(args.fps_summary_dir) / f"lbph_{run_id}.json"
@@ -346,17 +514,30 @@ def main() -> None:
         "run_id": run_id,
         "algorithm": "lbph",
         "average_fps": avg_fps,
+        "average_recognition_fps": avg_rec_fps,
         "frames": frame_count,
+        "detections": detection_count,
+        "recognitions": recognition_count,
+        "tracking_updates": track_updates,
         "duration_seconds": total_seconds,
         "unknown_threshold": args.unknown_threshold,
+        "detect_every": detect_every,
+        "downscale_max_side": args.downscale_max_side,
+        "align_eyes": args.align_eyes,
     }
     with summary_path.open("w", encoding="utf-8") as f:
         json.dump(summary_payload, f, indent=2)
+
+    if args.session_log_json:
+        Path(args.session_log_json).parent.mkdir(parents=True, exist_ok=True)
+        with open(args.session_log_json, "w", encoding="utf-8") as f:
+            json.dump(summary_payload, f, indent=2)
 
     if fps_log_file is not None:
         fps_log_file.close()
 
     print(f"[FPS] Average FPS: {avg_fps:.2f}")
+    print(f"[FPS] Average recognition FPS: {avg_rec_fps:.2f}")
     print(f"[FPS] Summary: {summary_path}")
 
 

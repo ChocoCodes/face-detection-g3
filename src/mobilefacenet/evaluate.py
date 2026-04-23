@@ -12,6 +12,13 @@ from typing import List
 import cv2 as cv
 import numpy as np
 
+from src.dataset_layout import gather_augmented_person_dirs, infer_target_split_name
+from src.reporting.identity import (
+    attach_entity_identity,
+    build_dataset_profile,
+    derive_model_variant,
+)
+
 ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -75,6 +82,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--report-json",
         default=root_path("reports", "evaluation", "yunet_mobilefacenet_eval.json"),
+    )
+    parser.add_argument(
+        "--run-tag",
+        default="",
+        help="Optional run tag to disambiguate reports for the same model/dataset profile.",
     )
     parser.add_argument("--threshold", type=float, default=-1.0)
     parser.add_argument("--det-score-threshold", type=float, default=0.6)
@@ -243,18 +255,14 @@ def gather_entries(
 
     if include_augmented:
         augmented_root = os.path.join(base_data_dir, aug_dir)
-        if os.path.isdir(augmented_root):
-            for split_name in sorted(os.listdir(augmented_root)):
-                if aug_splits and split_name.lower() not in aug_splits:
-                    continue
-                split_path = os.path.join(augmented_root, split_name)
-                if not os.path.isdir(split_path):
-                    continue
-                bucket = f"augmented/{split_name}"
-                for person in sorted(os.listdir(split_path)):
-                    person_path = os.path.join(split_path, person)
-                    if os.path.isdir(person_path):
-                        entries.append((bucket, person, person_path))
+        target_split = infer_target_split_name(raw_dir=raw_dir, processed_dir=processed_dir)
+        entries.extend(
+            gather_augmented_person_dirs(
+                augmented_root=augmented_root,
+                aug_splits=aug_splits,
+                target_split=target_split,
+            )
+        )
 
     return entries
 
@@ -829,7 +837,9 @@ def main() -> None:
     thresholds = [
         float(x.strip()) for x in args.threshold_sweep.split(",") if x.strip()
     ]
-    threshold_sweep = compute_threshold_sweep(eval_records, thresholds) if thresholds else []
+    if not thresholds:
+        thresholds = [0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 0.65, 0.70, 0.75]
+    threshold_sweep = compute_threshold_sweep(eval_records, thresholds)
 
     os.makedirs(os.path.dirname(args.report_json), exist_ok=True)
 
@@ -853,7 +863,7 @@ def main() -> None:
             "workers": workers,
             "batch_size": batch_size,
             "worker_chunksize": worker_chunksize,
-            "threshold_sweep": args.threshold_sweep,
+            "threshold_sweep": ",".join(f"{t:.2f}" for t in thresholds),
         },
         "elapsed_seconds": elapsed,
         "buckets": [bucket_to_dict(name, per_bucket[name]) for name in sorted(per_bucket.keys())],
@@ -861,6 +871,29 @@ def main() -> None:
         "threshold_sweep": threshold_sweep,
         "sample_misclassifications": misclassified,
     }
+    target_split = infer_target_split_name(
+        raw_dir=args.raw_dir_name,
+        processed_dir=args.processed_dir_name,
+    )
+    dataset_profile = build_dataset_profile(
+        base_data_dir=args.base_data_dir,
+        raw_dir_name=args.raw_dir_name,
+        include_raw=args.raw_dir_name != "__disabled__",
+        processed_dir_name=args.processed_dir_name,
+        include_processed=args.include_processed,
+        augmented_dir_name=args.augmented_dir_name,
+        include_augmented=args.include_augmented,
+        aug_splits=aug_splits,
+        target_split=target_split,
+    )
+    model_variant = derive_model_variant(args.enrollment_path, fallback="yunet_mobilefacenet")
+    attach_entity_identity(
+        report=report,
+        model_family="yunet_mobilefacenet",
+        dataset_profile=dataset_profile,
+        model_variant=model_variant,
+        run_tag=args.run_tag,
+    )
 
     with open(args.report_json, "w", encoding="utf-8") as f:
         json.dump(report, f, indent=2)
