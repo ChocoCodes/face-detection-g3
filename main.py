@@ -2,6 +2,8 @@ import shlex
 import subprocess
 import json
 import os
+import hashlib
+import re
 from pathlib import Path
 
 
@@ -448,6 +450,165 @@ def build_dataset_label_from_args(
     return " | ".join(tokens) if tokens else "no_dataset_selected"
 
 
+def combo_slug_for_args(
+    args: list[str],
+    *,
+    is_training: bool,
+    is_evaluation: bool,
+) -> str:
+    label = build_dataset_label_from_args(
+        args,
+        is_training=is_training,
+        is_evaluation=is_evaluation,
+    )
+    clean = re.sub(r"[^a-zA-Z0-9]+", "_", label.lower()).strip("_")
+    if not clean:
+        clean = "dataset"
+    digest = hashlib.sha1(label.encode("utf-8")).hexdigest()[:10]
+    compact = clean[:48].strip("_")
+    if not compact:
+        compact = "dataset"
+    return f"{compact}_{digest}"
+
+
+def auto_artifact_args_for_action(
+    *,
+    model_name: str,
+    rel_script: str,
+    base_args: list[str],
+    is_training: bool,
+    is_evaluation: bool,
+) -> list[str]:
+    # Respect explicit user-provided artifact paths.
+    if model_name == "LBPH":
+        if is_training:
+            if has_flag(base_args, "--model-output") or has_flag(base_args, "--labels-output"):
+                return []
+            slug = combo_slug_for_args(base_args, is_training=True, is_evaluation=False)
+            return [
+                "--model-output",
+                f"models/lbph/trainer_{slug}.yml",
+                "--labels-output",
+                f"models/lbph/labels_{slug}.json",
+            ]
+        if is_evaluation:
+            if has_flag(base_args, "--model-path") or has_flag(base_args, "--labels-path"):
+                return []
+            slug = combo_slug_for_args(base_args, is_training=False, is_evaluation=True)
+            return [
+                "--model-path",
+                f"models/lbph/trainer_{slug}.yml",
+                "--labels-path",
+                f"models/lbph/labels_{slug}.json",
+            ]
+
+    if model_name == "Eigenfaces":
+        if is_training:
+            if has_flag(base_args, "--model-output") or has_flag(base_args, "--labels-output"):
+                return []
+            slug = combo_slug_for_args(base_args, is_training=True, is_evaluation=False)
+            return [
+                "--model-output",
+                f"models/eigenfaces/trainer_{slug}.yml",
+                "--labels-output",
+                f"models/eigenfaces/labels_{slug}.json",
+            ]
+        if is_evaluation:
+            if has_flag(base_args, "--model-path") or has_flag(base_args, "--labels-path"):
+                return []
+            slug = combo_slug_for_args(base_args, is_training=False, is_evaluation=True)
+            return [
+                "--model-path",
+                f"models/eigenfaces/trainer_{slug}.yml",
+                "--labels-path",
+                f"models/eigenfaces/labels_{slug}.json",
+            ]
+
+    if model_name == "Fisherfaces":
+        if is_training:
+            if has_flag(base_args, "--model-output") or has_flag(base_args, "--labels-output"):
+                return []
+            slug = combo_slug_for_args(base_args, is_training=True, is_evaluation=False)
+            return [
+                "--model-output",
+                f"models/fisherfaces/trainer_{slug}.yml",
+                "--labels-output",
+                f"models/fisherfaces/labels_{slug}.json",
+            ]
+        if is_evaluation:
+            if has_flag(base_args, "--model-path") or has_flag(base_args, "--labels-path"):
+                return []
+            slug = combo_slug_for_args(base_args, is_training=False, is_evaluation=True)
+            return [
+                "--model-path",
+                f"models/fisherfaces/trainer_{slug}.yml",
+                "--labels-path",
+                f"models/fisherfaces/labels_{slug}.json",
+            ]
+
+    if model_name in {"ArcFace", "ArcFace MobileNet INT8"}:
+        if is_training and not has_flag(base_args, "--enrollment-output"):
+            slug = combo_slug_for_args(base_args, is_training=True, is_evaluation=False)
+            return [
+                "--enrollment-output",
+                f"models/arcface_mobilenet/enrollment_{slug}.json",
+            ]
+        if is_evaluation and not has_flag(base_args, "--enrollment-path"):
+            slug = combo_slug_for_args(base_args, is_training=False, is_evaluation=True)
+            return [
+                "--enrollment-path",
+                f"models/arcface_mobilenet/enrollment_{slug}.json",
+            ]
+
+    if model_name == "MobileFaceNet":
+        if is_training and not has_flag(base_args, "--enrollment-output"):
+            slug = combo_slug_for_args(base_args, is_training=True, is_evaluation=False)
+            return [
+                "--enrollment-output",
+                f"models/yunet_mobilefacenet/enrollment_{slug}.json",
+            ]
+        if is_evaluation and not has_flag(base_args, "--enrollment-path"):
+            slug = combo_slug_for_args(base_args, is_training=False, is_evaluation=True)
+            return [
+                "--enrollment-path",
+                f"models/yunet_mobilefacenet/enrollment_{slug}.json",
+            ]
+
+    if model_name == "EdgeFace":
+        if is_training and not has_flag(base_args, "--enrollment-output"):
+            slug = combo_slug_for_args(base_args, is_training=True, is_evaluation=False)
+            return [
+                "--enrollment-output",
+                f"models/edgeface/enrollment_{slug}.json",
+            ]
+        if is_evaluation and not has_flag(base_args, "--enrollment-path"):
+            slug = combo_slug_for_args(base_args, is_training=False, is_evaluation=True)
+            return [
+                "--enrollment-path",
+                f"models/edgeface/enrollment_{slug}.json",
+            ]
+
+    return []
+
+
+def warn_if_missing_auto_artifacts(args: list[str], is_evaluation: bool) -> None:
+    if not is_evaluation:
+        return
+    path_flags = ["--model-path", "--labels-path", "--enrollment-path"]
+    checked_any = False
+    for flag in path_flags:
+        if not has_flag(args, flag):
+            continue
+        value = get_arg_value(args, flag, "").strip()
+        if not value:
+            continue
+        checked_any = True
+        if not resolve_path(value).exists():
+            print(f"[WARN] Selected artifact does not exist yet: {value}")
+    if checked_any:
+        print("[INFO] If needed, override with Optional extra args.")
+
+
 def maybe_confirm_existing_dataset_combo(
     *,
     model_name: str,
@@ -862,7 +1023,16 @@ def main() -> int:
             if has_flag(extra_args, "--aug-splits"):
                 preset_args = remove_flag_and_value(preset_args, "--aug-splits")
 
-            final_args = [*preset_args, *extra_args]
+            base_args = [*preset_args, *extra_args]
+            auto_args = auto_artifact_args_for_action(
+                model_name=model_name,
+                rel_script=rel_script,
+                base_args=base_args,
+                is_training=training_action,
+                is_evaluation=evaluate_action,
+            )
+            final_args = [*base_args, *auto_args]
+            warn_if_missing_auto_artifacts(final_args, is_evaluation=evaluate_action)
             if training_action or evaluate_action:
                 should_continue = maybe_confirm_existing_dataset_combo(
                     model_name=model_name,

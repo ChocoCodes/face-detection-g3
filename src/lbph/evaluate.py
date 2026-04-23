@@ -252,6 +252,18 @@ def print_progress(processed: int, total: int, start_time: float, status: str) -
     sys.stdout.flush()
 
 
+def print_progress_stream(processed: int, start_time: float, status: str) -> None:
+    elapsed = time.time() - start_time
+    rate = processed / elapsed if elapsed > 0 else 0.0
+    msg = (
+        f"\r[PROGRESS] processed={processed:<8} "
+        f"| elapsed {format_seconds(elapsed)} "
+        f"| {rate:6.2f} img/s | {status:<28}"
+    )
+    sys.stdout.write(msg)
+    sys.stdout.flush()
+
+
 def bucket_to_dict(name: str, stats: Stats) -> dict:
     eval_count = stats.evaluated_images
     overall_acc = (100.0 * stats.correct / eval_count) if eval_count else 0.0
@@ -446,20 +458,15 @@ def main() -> None:
         )
         print(f"[WARN] {leakage_warning}")
 
-    total_planned_images = 0
-    for bucket_name, person_name, person_path in entries:
-        image_files = [f for f in sorted(os.listdir(person_path)) if is_image_file(f)]
-        if args.max_images_per_person > 0:
-            rng = random.Random(stable_person_seed(args.random_seed, bucket_name, person_name))
-            sampled = list(image_files)
-            rng.shuffle(sampled)
-            image_files = sampled[: args.max_images_per_person]
-        total_planned_images += len(image_files)
-
     per_bucket_stats = defaultdict(Stats)
     overall = Stats()
     misclassified = []
     eval_records: list[dict] = []
+
+    print(
+        f"[INFO] Evaluating {len(entries)} identity folders "
+        "(streaming mode: no long pre-count pass)"
+    )
 
     start_time = time.time()
     processed_images = 0
@@ -475,14 +482,9 @@ def main() -> None:
 
         for image_name in image_files:
             processed_images += 1
-            if (
-                processed_images == 1
-                or processed_images % progress_interval == 0
-                or processed_images == total_planned_images
-            ):
-                print_progress(
+            if processed_images == 1 or processed_images % progress_interval == 0:
+                print_progress_stream(
                     processed=processed_images,
-                    total=total_planned_images,
                     start_time=start_time,
                     status=f"{bucket_name}/{person_name}",
                 )
@@ -583,10 +585,9 @@ def main() -> None:
 
     elapsed = time.time() - start_time
 
-    if total_planned_images > 0:
-        print_progress(
-            processed=min(processed_images, total_planned_images),
-            total=total_planned_images,
+    if processed_images > 0:
+        print_progress_stream(
+            processed=processed_images,
             start_time=start_time,
             status="done",
         )
