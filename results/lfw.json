@@ -1,0 +1,35 @@
+{
+    "no_faces_count": 138,
+    "facenet": {
+        "DB": "features/lfw-facenet.npy",
+        "n_persons": 5703,
+        "n_comparisons": 171223158,
+        "n_fp": 12096,
+        "tp_percent": 100.0,
+        "fp_percent": 0.0071
+    },
+    "arcface": {
+        "DB": "features/lfw-arcface.npy",
+        "n_persons": 5703,
+        "n_comparisons": 171223158,
+        "n_fp": 2043695,
+        "tp_percent": 100.0,
+        "fp_percent": 1.1936
+    },
+    "mobilenet": {
+        "DB": "features/lfw-mobilenet.npy",
+        "n_persons": 5703,
+        "n_comparisons": 171223158,
+        "n_fp": 29745332,
+        "tp_percent": 100.0,
+        "fp_percent": 17.3723
+    },
+    "sface": {
+        "DB": "features/lfw-sface.npy",
+        "n_persons": 5703,
+        "n_comparisons": 171223158,
+        "n_fp": 331316,
+        "tp_percent": 100.0,
+        "fp_percent": 0.1935
+    }
+}

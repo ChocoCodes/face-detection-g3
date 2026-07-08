@@ -1,0 +1,27 @@
+{
+    "no_faces_count": 1732,
+    "facenet": {
+        "DB": "features/lasalledb2-facenet.npy",
+        "n_persons": 28,
+        "n_comparisons": 91306856,
+        "n_fp": 1526082,
+        "tp_percent": 100.0,
+        "fp_percent": 1.6714
+    },
+    "mobilenet": {
+        "DB": "features/lasalledb2-mobilenet.npy",
+        "n_persons": 28,
+        "n_comparisons": 91306856,
+        "n_fp": 16182454,
+        "tp_percent": 100.0,
+        "fp_percent": 17.7232
+    },
+    "arcface": {
+        "DB": "features/lasalledb2-arcface.npy",
+        "n_persons": 28,
+        "n_comparisons": 91306856,
+        "n_fp": 213586,
+        "tp_percent": 100.0,
+        "fp_percent": 0.2339
+    }
+}
