@@ -143,13 +143,14 @@ def main():
     parser = argparse.ArgumentParser(
         description="Run 1:1 and cross-identity independence tests on a pre-built .npy feature database."
     )
-    parser.add_argument("--db", required=True, help="Path to the .npy feature database (from build_face_db.py)")
+    parser.add_argument("--db", required=True, help="Path to the .npy feature database (from db-name.py)")
     parser.add_argument("--model", required=True, choices=list(MODELS),
                          help="Which model this .npy was built with (needed for its similarity() + threshold)")
-    parser.add_argument("--output", default="results.json", help="Output JSON filename")
+    
     args = parser.parse_args()
 
-    output_file = args.output if args.output.lower().endswith(".json") else args.output + ".json"
+    db_derived = args.db.split('-')[0]
+    output_file = f"{db_derived}-{args.model}.json"
     output_path = os.path.join("results", output_file)
     os.makedirs("results", exist_ok=True)
 

@@ -10,10 +10,12 @@ class FaceAligner:
             self, 
             detector_weights = "../models/face_detection_yunet_2023mar.onnx", 
             recognizer_weights="../models/face_recognition_sface_2021dec.onnx", 
-            input_size=(320, 320)
+            input_size=(320, 320),
+            threshold=0.6
         ):
-        self.input_size = input_size 
-        self.detector = cv2.FaceDetectorYN.create(detector_weights, "", self.input_size)
+        self.input_size = input_size
+        self.threshold = threshold
+        self.detector = cv2.FaceDetectorYN.create(detector_weights, "", self.input_size, score_threshold=self.threshold)
         self.recognizer = cv2.FaceRecognizerSF.create(recognizer_weights, "")
     
     def align(self, bgr_image):
@@ -21,7 +23,13 @@ class FaceAligner:
         self.detector.setInputSize((w, h))
         retval, faces = self.detector.detect(bgr_image)
 
-        return None if not retval or faces is None else self.recognizer.alignCrop(bgr_image, faces[0])
+        if not retval or faces is None:
+            return None
+        
+        areas = faces[:, 2] * faces[:, 3]
+        largest_face = faces[np.argmax(areas)]
+
+        return self.recognizer.alignCrop(bgr_image, largest_face)
 
 class MobileNetV2CNN:
     def __init__(self):

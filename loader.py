@@ -3,6 +3,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import cv2 as cv
 
+"""
+NOTE: Change the paths to the database paths you have set up in your directory. Use absolute pathing.
+"""
 DB_PATHS = {
     "LaSalleDB1": "D:/FILES/PROGRAMMING/face-detection/LaSalleDB1/original",
     "LaSalleDB2": "D:/FILES/PROGRAMMING/face-detection/LaSalleDB1",  # light/medium/heavy variants
