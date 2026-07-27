@@ -13,14 +13,12 @@ DB_PATHS = {
 }
 
 def plot(independent, threshold=1.128,
-         title='Frequency vs. NormL2 Distance Distribution',
-         output_path='frequency_distance_plot.png', show=True):
+         model='',
+         output_path='results/images/frequency_distance_plot.png', show=True):
     """
-    Same plot as your original -- now threshold/title/output_path are
-    parameters instead of hardcoded, so it can be called once per model
-    (each with its own threshold and its own output file) instead of
-    always overwriting frequency_distance_plot_lfw.png with SFace's number.
+        KDE Chart Visualization of Independence Test performed per model.
     """
+    title = f"Frequency vs Distance ({model} @ Threshold ({threshold}))"
     plt.style.use('seaborn-v0_8')
     plt.figure(figsize=(8, 5.5))
  
